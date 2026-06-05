@@ -1,0 +1,35 @@
+# MongoDB Configuration Template
+# 复制此文件为 mongodb_config.yaml 并填入真实的连接信息
+
+# mongodb:
+#   # MongoDB Atlas 连接字符串 (云端)
+#   # 格式: mongodb+srv://用户名:密码@集群地址/数据库名?参数
+#   connection_string: "mongodb+srv://xiaohu:hu140817..@cluster0.d589g.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+  
+#   # 数据库名称
+#   database_name: "PPTTOVideo"
+
+# ============================================
+# 本地 MongoDB 连接配置示例
+# ============================================
+# 如果使用本地安装的 MongoDB，请取消下面的注释并注释掉上面的 Atlas 配置
+#
+mongodb:
+  # 本地 MongoDB 连接字符串
+  # 格式: mongodb://用户名:密码@主机:端口/数据库名
+  # 无认证: mongodb://localhost:27018/
+  # 有认证: mongodb://username:password@localhost:27018/
+  connection_string: "mongodb://localhost:27018/"
+  
+  # 数据库名称
+  database_name: "NewapiBalance"
+
+# 使用说明:
+# 1. 将此文件复制为 mongodb_config.yaml
+# 2. 将 your_username 替换为您的 MongoDB 用户名
+# 3. 将 your_password 替换为您的 MongoDB 密码  
+# 4. 将 your_cluster 替换为您的 MongoDB 集群地址
+# 5. 将 YourAppName 替换为您的应用名称
+# 
+# 示例:
+# connection_string: "mongodb+srv://admin:MyPassword123@mycluster.abc123.mongodb.net/?retryWrites=true&w=majority&appName=SmokeTranslate"

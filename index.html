@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>多站点余额查询 - API Balance Monitor</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-light: #818cf8;
+            --primary-dark: #4f46e5;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --bg-main: #0f172a;
+            --bg-card: #1e293b;
+            --bg-input: #334155;
+            --text-main: #f1f5f9;
+            --text-sub: #94a3b8;
+            --border: #475569;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: var(--bg-main);
+            color: var(--text-main);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .app-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 30px 20px;
+        }
+
+        /* 头部 */
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary), #a855f7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: var(--text-sub);
+            font-size: 1.1rem;
+        }
+
+        /* 工具栏 */
+        .toolbar {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            cursor: pointer;
+            border: none;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white;
+            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, var(--success), #059669);
+            color: white;
+            box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
+        }
+
+        .btn-success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, var(--danger), #dc2626);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            transform: translateY(-2px);
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 2px solid var(--border);
+            color: var(--text-main);
+        }
+
+        .btn-outline:hover {
+            border-color: var(--primary);
+            background: rgba(99, 102, 241, 0.1);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        /* 统计卡片 */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 25px;
+            border: 1px solid var(--border);
+            transition: all 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-3px);
+            border-color: var(--primary);
+        }
+
+        .stat-label {
+            color: var(--text-sub);
+            font-size: 0.9rem;
+            margin-bottom: 8px;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 800;
+            color: var(--text-main);
+        }
+
+        .stat-value.primary { color: var(--primary-light); }
+        .stat-value.success { color: var(--success); }
+        .stat-value.warning { color: var(--warning); }
+
+        /* 站点卡片网格 */
+        .sites-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .site-card {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 25px;
+            border: 1px solid var(--border);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .site-card:hover {
+            border-color: var(--primary);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .site-card.loading::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 3px;
+            background: linear-gradient(90deg, transparent, var(--primary), transparent);
+            animation: loading 1.5s infinite;
+        }
+
+        @keyframes loading {
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
+
+        .site-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 20px;
+        }
+
+        .site-name {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: var(--text-main);
+            margin-bottom: 5px;
+        }
+
+        .site-url {
+            font-size: 0.85rem;
+            color: var(--text-sub);
+            word-break: break-all;
+        }
+
+        .site-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .site-actions button {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: all 0.2s;
+            background: var(--bg-input);
+            color: var(--text-sub);
+        }
+
+        .site-actions button:hover {
+            background: var(--primary);
+            color: white;
+        }
+
+        .site-actions button.delete:hover {
+            background: var(--danger);
+        }
+
+        .balance-display {
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(168, 85, 247, 0.1));
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 15px;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+        }
+
+        .balance-label {
+            font-size: 0.85rem;
+            color: var(--text-sub);
+            margin-bottom: 5px;
+        }
+
+        .balance-value {
+            font-size: 2.2rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary-light), #a855f7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .balance-usd {
+            font-size: 1rem;
+            color: var(--success);
+            margin-top: 5px;
+        }
+
+        .site-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            font-size: 0.9rem;
+        }
+
+        .info-item {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .info-label {
+            color: var(--text-sub);
+            font-size: 0.8rem;
+        }
+
+        .info-value {
+            color: var(--text-main);
+            font-weight: 600;
+        }
+
+        .site-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .status-success {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--success);
+        }
+
+        .status-error {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--danger);
+        }
+
+        .status-pending {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--warning);
+        }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        /* 模态框 */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+
+        .modal {
+            background: var(--bg-card);
+            border-radius: 20px;
+            padding: 30px;
+            width: 100%;
+            max-width: 500px;
+            border: 1px solid var(--border);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal h2 {
+            font-size: 1.5rem;
+            margin-bottom: 25px;
+            color: var(--text-main);
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--text-sub);
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 14px 16px;
+            border-radius: 10px;
+            border: 2px solid var(--border);
+            background: var(--bg-input);
+            color: var(--text-main);
+            font-size: 1rem;
+            transition: all 0.3s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--primary);
+            background: var(--bg-main);
+        }
+
+        .form-group input::placeholder {
+            color: var(--text-sub);
+            opacity: 0.6;
+        }
+
+        .form-hint {
+            font-size: 0.8rem;
+            color: var(--text-sub);
+            margin-top: 6px;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 15px;
+            margin-top: 30px;
+        }
+
+        .modal-actions .btn {
+            flex: 1;
+        }
+
+        /* 空状态 */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            background: var(--bg-card);
+            border-radius: 16px;
+            border: 2px dashed var(--border);
+        }
+
+        .empty-state .icon {
+            font-size: 4rem;
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+
+        .empty-state h3 {
+            font-size: 1.5rem;
+            margin-bottom: 10px;
+            color: var(--text-main);
+        }
+
+        .empty-state p {
+            color: var(--text-sub);
+            margin-bottom: 25px;
+        }
+
+        /* 进度条 */
+        .progress-bar {
+            height: 6px;
+            background: var(--bg-input);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), #a855f7);
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }
+
+        /* 错误信息 */
+        .error-message {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 8px;
+            padding: 12px;
+            color: var(--danger);
+            font-size: 0.9rem;
+            margin-top: 10px;
+        }
+
+        /* 响应式 */
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.8rem;
+            }
+
+            .sites-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .toolbar {
+                flex-direction: column;
+            }
+
+            .toolbar .btn {
+                width: 100%;
+                justify-content: center;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        /* 刷新动画 */
+        .spin {
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        /* 最后更新时间 */
+        .last-update {
+            text-align: center;
+            color: var(--text-sub);
+            font-size: 0.9rem;
+            margin-top: 20px;
+        }
+
+        /* 导入导出区域 */
+        .import-export {
+            margin-top: 30px;
+            padding: 20px;
+            background: var(--bg-card);
+            border-radius: 16px;
+            border: 1px solid var(--border);
+        }
+
+        .import-export h3 {
+            margin-bottom: 15px;
+            font-size: 1.1rem;
+        }
+
+        .import-export textarea {
+            width: 100%;
+            height: 120px;
+            padding: 12px;
+            border-radius: 10px;
+            border: 2px solid var(--border);
+            background: var(--bg-input);
+            color: var(--text-main);
+            font-family: monospace;
+            font-size: 0.85rem;
+            resize: vertical;
+            margin-bottom: 15px;
+        }
+
+        .import-export textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .import-export-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="app-container">
+            <!-- 头部 -->
+            <header class="header">
+                <h1>🔍 多站点余额查询</h1>
+                <p>统一管理多个 New-API 站点余额，实时监控账户状态</p>
+                <p v-if="useProxy" style="color: #10b981; margin-top: 10px; font-size: 0.9rem;">
+                    ✅ 服务器模式已启用（配置自动保存到服务器）
+                </p>
+                <p v-else style="color: #f59e0b; margin-top: 10px; font-size: 0.9rem;">
+                    ⚠️ 本地文件模式（建议通过服务器访问以启用完整功能）
+                </p>
+            </header>
+
+            <!-- 统计卡片 -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">📊 站点总数</div>
+                    <div class="stat-value primary">{{ sites.length }}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">💰 总余额（额度）</div>
+                    <div class="stat-value success">{{ formatQuota(totalQuota) }}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">💵 折合美元</div>
+                    <div class="stat-value warning">${{ totalUsd.toFixed(2) }}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">✅ 在线站点</div>
+                    <div class="stat-value success">{{ onlineSites }}</div>
+                </div>
+            </div>
+
+            <!-- 工具栏 -->
+            <div class="toolbar">
+                <button class="btn btn-primary" @click="showAddModal = true">
+                    ➕ 添加站点
+                </button>
+                <button class="btn btn-success" @click="refreshAll" :disabled="isRefreshing">
+                    <span :class="{ spin: isRefreshing }">🔄</span>
+                    {{ isRefreshing ? '刷新中...' : '刷新全部' }}
+                </button>
+                <button class="btn btn-outline" @click="showImportExport = !showImportExport">
+                    📦 导入/导出配置
+                </button>
+            </div>
+
+            <!-- 导入导出区域 -->
+            <div class="import-export" v-if="showImportExport">
+                <h3>📦 导入/导出站点配置</h3>
+                <textarea v-model="configJson" placeholder="在此粘贴配置JSON进行导入，或点击导出获取当前配置..."></textarea>
+                <div class="import-export-actions">
+                    <button class="btn btn-primary" @click="importConfig">📥 导入配置</button>
+                    <button class="btn btn-outline" @click="exportConfig">📤 导出配置</button>
+                    <button class="btn btn-outline" @click="copyConfig">📋 复制配置</button>
+                </div>
+            </div>
+
+            <!-- 站点列表 -->
+            <div class="sites-grid" v-if="sites.length > 0">
+                <div 
+                    class="site-card" 
+                    v-for="(site, index) in sites" 
+                    :key="index"
+                    :class="{ loading: site.loading }"
+                >
+                    <div class="site-header">
+                        <div>
+                            <div class="site-name">{{ site.name }}</div>
+                            <div class="site-url">{{ site.url }}</div>
+                        </div>
+                        <div class="site-actions">
+                            <button @click="refreshSite(index)" title="刷新">🔄</button>
+                            <button @click="editSite(index)" title="编辑">✏️</button>
+                            <button class="delete" @click="deleteSite(index)" title="删除">🗑️</button>
+                        </div>
+                    </div>
+
+                    <div class="balance-display">
+                        <div class="balance-label">账户余额</div>
+                        <div class="balance-value" v-if="site.data">
+                            {{ formatQuota(site.data.quota) }}
+                        </div>
+                        <div class="balance-value" v-else>--</div>
+                        <div class="balance-usd" v-if="site.data">
+                            ≈ ${{ quotaToUsd(site.data.quota).toFixed(4) }}
+                        </div>
+                    </div>
+
+                    <div class="site-info" v-if="site.data">
+                        <div class="info-item">
+                            <span class="info-label">用户名</span>
+                            <span class="info-value">{{ site.data.username }}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">用户组</span>
+                            <span class="info-value">{{ site.data.group }}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">已用额度</span>
+                            <span class="info-value">{{ formatQuota(site.data.used_quota) }}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">请求次数</span>
+                            <span class="info-value">{{ site.data.request_count?.toLocaleString() }}</span>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 15px;">
+                        <span class="site-status" :class="getStatusClass(site)">
+                            <span class="status-dot"></span>
+                            {{ getStatusText(site) }}
+                        </span>
+                    </div>
+
+                    <div class="error-message" v-if="site.error">
+                        {{ site.error }}
+                    </div>
+                </div>
+            </div>
+
+            <!-- 空状态 -->
+            <div class="empty-state" v-else>
+                <div class="icon">📭</div>
+                <h3>暂无站点配置</h3>
+                <p>点击"添加站点"按钮开始添加您的第一个站点</p>
+                <button class="btn btn-primary" @click="showAddModal = true">
+                    ➕ 添加第一个站点
+                </button>
+            </div>
+
+            <!-- 最后更新时间 -->
+            <div class="last-update" v-if="lastUpdate">
+                最后更新：{{ lastUpdate }}
+            </div>
+        </div>
+
+        <!-- 添加/编辑模态框 -->
+        <div class="modal-overlay" v-if="showAddModal" @click.self="closeModal">
+            <div class="modal">
+                <h2>{{ editIndex >= 0 ? '✏️ 编辑站点' : '➕ 添加站点' }}</h2>
+                
+                <div class="form-group">
+                    <label>站点名称</label>
+                    <input 
+                        type="text" 
+                        v-model="form.name" 
+                        placeholder="例如：AiFast主站"
+                    >
+                </div>
+
+                <div class="form-group">
+                    <label>站点URL</label>
+                    <input 
+                        type="text" 
+                        v-model="form.url" 
+                        placeholder="例如：https://aifast.site"
+                    >
+                    <div class="form-hint">不需要带末尾斜杠，会自动添加 /api/user/self</div>
+                </div>
+
+                <div class="form-group">
+                    <label>Authorization Token</label>
+                    <input 
+                        type="password" 
+                        v-model="form.token" 
+                        placeholder="Bearer Token（系统访问令牌）"
+                    >
+                </div>
+
+                <div class="form-group">
+                    <label>User ID</label>
+                    <input 
+                        type="text" 
+                        v-model="form.userId" 
+                        placeholder="用户ID，例如：1"
+                    >
+                </div>
+
+                <div class="modal-actions">
+                    <button class="btn btn-outline" @click="closeModal">取消</button>
+                    <button class="btn btn-primary" @click="saveSite">
+                        {{ editIndex >= 0 ? '保存修改' : '添加站点' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted } = Vue;
+
+        createApp({
+            setup() {
+                // 站点列表
+                const sites = ref([]);
+                
+                // 模态框状态
+                const showAddModal = ref(false);
+                const editIndex = ref(-1);
+                
+                // 表单数据
+                const form = ref({
+                    name: '',
+                    url: '',
+                    token: '',
+                    userId: ''
+                });
+
+                // 刷新状态
+                const isRefreshing = ref(false);
+                const lastUpdate = ref('');
+
+                // 导入导出
+                const showImportExport = ref(false);
+                const configJson = ref('');
+
+                // 计算总余额
+                const totalQuota = computed(() => {
+                    return sites.value.reduce((sum, site) => {
+                        return sum + (site.data?.quota || 0);
+                    }, 0);
+                });
+
+                // 计算总美元
+                const totalUsd = computed(() => {
+                    return quotaToUsd(totalQuota.value);
+                });
+
+                // 在线站点数
+                const onlineSites = computed(() => {
+                    return sites.value.filter(s => s.data && !s.error).length;
+                });
+
+                // 额度转美元（假设500000额度 = 1美元）
+                function quotaToUsd(quota) {
+                    return quota / 500000;
+                }
+
+                // 格式化额度显示
+                function formatQuota(quota) {
+                    if (!quota && quota !== 0) return '--';
+                    if (quota >= 1000000000) {
+                        return (quota / 1000000000).toFixed(2) + 'B';
+                    } else if (quota >= 1000000) {
+                        return (quota / 1000000).toFixed(2) + 'M';
+                    } else if (quota >= 1000) {
+                        return (quota / 1000).toFixed(2) + 'K';
+                    }
+                    return quota.toString();
+                }
+
+                // 获取状态样式
+                function getStatusClass(site) {
+                    if (site.loading) return 'status-pending';
+                    if (site.error) return 'status-error';
+                    if (site.data) return 'status-success';
+                    return 'status-pending';
+                }
+
+                // 获取状态文本
+                function getStatusText(site) {
+                    if (site.loading) return '查询中...';
+                    if (site.error) return '连接失败';
+                    if (site.data) return '在线';
+                    return '未查询';
+                }
+
+                // 是否使用代理模式（通过服务器访问时自动启用）
+                // 判断条件：不是直接打开文件（file:// 协议）
+                const useProxy = computed(() => {
+                    return window.location.protocol !== 'file:';
+                });
+
+                // 查询单个站点
+                async function refreshSite(index) {
+                    const site = sites.value[index];
+                    site.loading = true;
+                    site.error = null;
+
+                    try {
+                        const targetUrl = site.url.replace(/\/$/, '') + '/api/user/self';
+                        
+                        let fetchUrl, fetchOptions;
+                        
+                        if (useProxy.value) {
+                            // 通过本地代理服务器请求
+                            fetchUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}`;
+                            fetchOptions = {
+                                method: 'GET',
+                                headers: {
+                                    'Authorization': `Bearer ${site.token}`,
+                                    'New-Api-User': site.userId
+                                }
+                            };
+                        } else {
+                            // 直接请求（可能有跨域问题）
+                            fetchUrl = targetUrl;
+                            fetchOptions = {
+                                method: 'GET',
+                                headers: {
+                                    'Authorization': `Bearer ${site.token}`,
+                                    'New-Api-User': site.userId
+                                }
+                            };
+                        }
+                        
+                        const response = await fetch(fetchUrl, fetchOptions);
+                        const text = await response.text();
+                        
+                        // 尝试解析 JSON
+                        let result;
+                        try {
+                            result = JSON.parse(text);
+                        } catch (parseError) {
+                            // 如果不是 JSON，显示友好错误
+                            console.error('非JSON响应:', text.substring(0, 200));
+                            site.error = '目标站点返回了非JSON响应，可能是网关错误或服务异常';
+                            return;
+                        }
+                        
+                        if (result.success && result.data) {
+                            site.data = result.data;
+                        } else {
+                            site.error = result.message || '查询失败';
+                        }
+                    } catch (error) {
+                        let errorMsg = error.message || '未知错误';
+                        if (error.message?.includes('ERR_NAME_NOT_RESOLVED')) {
+                            errorMsg = '域名解析失败，请检查网络或使用代理模式';
+                        } else if (error.message?.includes('Failed to fetch')) {
+                            errorMsg = useProxy.value 
+                                ? '请求失败，请检查代理服务器是否运行' 
+                                : '请求失败（可能是跨域或网络问题），建议使用代理模式';
+                        } else if (error.message?.includes('Unexpected token')) {
+                            errorMsg = '目标站点返回了非JSON响应，请检查站点状态';
+                        }
+                        site.error = errorMsg;
+                    } finally {
+                        site.loading = false;
+                    }
+
+                    saveSites();
+                }
+
+                // 刷新所有站点
+                async function refreshAll() {
+                    isRefreshing.value = true;
+                    
+                    const promises = sites.value.map((_, index) => refreshSite(index));
+                    await Promise.all(promises);
+                    
+                    lastUpdate.value = new Date().toLocaleString('zh-CN');
+                    isRefreshing.value = false;
+                }
+
+                // 保存站点
+                function saveSite() {
+                    if (!form.value.name || !form.value.url || !form.value.token || !form.value.userId) {
+                        alert('请填写完整信息');
+                        return;
+                    }
+
+                    const siteData = {
+                        name: form.value.name,
+                        url: form.value.url.replace(/\/$/, ''),
+                        token: form.value.token,
+                        userId: form.value.userId,
+                        data: null,
+                        error: null,
+                        loading: false
+                    };
+
+                    if (editIndex.value >= 0) {
+                        // 编辑模式
+                        sites.value[editIndex.value] = {
+                            ...siteData,
+                            data: sites.value[editIndex.value].data
+                        };
+                    } else {
+                        // 添加模式
+                        sites.value.push(siteData);
+                    }
+
+                    saveSites();
+                    closeModal();
+
+                    // 立即刷新新添加或编辑的站点
+                    const targetIndex = editIndex.value >= 0 ? editIndex.value : sites.value.length - 1;
+                    refreshSite(targetIndex);
+                }
+
+                // 编辑站点
+                function editSite(index) {
+                    const site = sites.value[index];
+                    form.value = {
+                        name: site.name,
+                        url: site.url,
+                        token: site.token,
+                        userId: site.userId
+                    };
+                    editIndex.value = index;
+                    showAddModal.value = true;
+                }
+
+                // 删除站点
+                function deleteSite(index) {
+                    if (confirm('确定要删除这个站点吗？')) {
+                        sites.value.splice(index, 1);
+                        saveSites();
+                    }
+                }
+
+                // 关闭模态框
+                function closeModal() {
+                    showAddModal.value = false;
+                    editIndex.value = -1;
+                    form.value = { name: '', url: '', token: '', userId: '' };
+                }
+
+                // 保存到本地文件（通过服务器API）
+                async function saveSites() {
+                    const saveData = sites.value.map(site => ({
+                        name: site.name,
+                        url: site.url,
+                        token: site.token,
+                        userId: site.userId
+                    }));
+                    
+                    // 同时保存到 localStorage 作为备份
+                    localStorage.setItem('api-balance-sites', JSON.stringify(saveData));
+                    
+                    // 如果是代理模式，同时保存到本地文件
+                    if (useProxy.value) {
+                        try {
+                            await fetch('/api/config', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(saveData)
+                            });
+                            console.log('配置已保存到本地文件');
+                        } catch (err) {
+                            console.error('保存到文件失败:', err);
+                        }
+                    }
+                }
+
+                // 从本地文件加载（优先）或从 localStorage 加载
+                async function loadSites() {
+                    // 如果是代理模式，优先从文件加载
+                    if (useProxy.value) {
+                        try {
+                            const response = await fetch('/api/config');
+                            const result = await response.json();
+                            if (result.success && result.data && result.data.length > 0) {
+                                sites.value = result.data.map(site => ({
+                                    ...site,
+                                    data: null,
+                                    error: null,
+                                    loading: false
+                                }));
+                                console.log('从本地文件加载配置成功');
+                                return;
+                            }
+                        } catch (err) {
+                            console.error('从文件加载失败，尝试从 localStorage 加载:', err);
+                        }
+                    }
+                    
+                    // 回退到 localStorage
+                    const saved = localStorage.getItem('api-balance-sites');
+                    if (saved) {
+                        const loadedSites = JSON.parse(saved);
+                        sites.value = loadedSites.map(site => ({
+                            ...site,
+                            data: null,
+                            error: null,
+                            loading: false
+                        }));
+                        console.log('从 localStorage 加载配置成功');
+                    }
+                }
+
+                // 导出配置
+                function exportConfig() {
+                    const exportData = sites.value.map(site => ({
+                        name: site.name,
+                        url: site.url,
+                        token: site.token,
+                        userId: site.userId
+                    }));
+                    configJson.value = JSON.stringify(exportData, null, 2);
+                }
+
+                // 导入配置
+                function importConfig() {
+                    try {
+                        const importData = JSON.parse(configJson.value);
+                        if (!Array.isArray(importData)) {
+                            throw new Error('配置格式错误，应为数组');
+                        }
+                        
+                        importData.forEach(item => {
+                            if (item.name && item.url && item.token && item.userId) {
+                                // 检查是否已存在
+                                const exists = sites.value.some(s => s.url === item.url && s.userId === item.userId);
+                                if (!exists) {
+                                    sites.value.push({
+                                        name: item.name,
+                                        url: item.url.replace(/\/$/, ''),
+                                        token: item.token,
+                                        userId: item.userId,
+                                        data: null,
+                                        error: null,
+                                        loading: false
+                                    });
+                                }
+                            }
+                        });
+                        
+                        saveSites();
+                        alert('导入成功！');
+                        configJson.value = '';
+                    } catch (e) {
+                        alert('导入失败：' + e.message);
+                    }
+                }
+
+                // 复制配置
+                function copyConfig() {
+                    exportConfig();
+                    navigator.clipboard.writeText(configJson.value).then(() => {
+                        alert('配置已复制到剪贴板！');
+                    }).catch(() => {
+                        alert('复制失败，请手动复制');
+                    });
+                }
+
+                // 初始化
+                onMounted(async () => {
+                    await loadSites();
+                    if (sites.value.length > 0) {
+                        refreshAll();
+                    }
+                });
+
+                return {
+                    sites,
+                    showAddModal,
+                    editIndex,
+                    form,
+                    isRefreshing,
+                    lastUpdate,
+                    showImportExport,
+                    configJson,
+                    totalQuota,
+                    totalUsd,
+                    onlineSites,
+                    useProxy,
+                    quotaToUsd,
+                    formatQuota,
+                    getStatusClass,
+                    getStatusText,
+                    refreshSite,
+                    refreshAll,
+                    saveSite,
+                    editSite,
+                    deleteSite,
+                    closeModal,
+                    exportConfig,
+                    importConfig,
+                    copyConfig
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

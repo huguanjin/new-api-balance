@@ -1,0 +1,14 @@
+{
+  "name": "balance-query",
+  "version": "1.0.0",
+  "description": "多站点余额查询系统",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
