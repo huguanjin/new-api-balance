@@ -1,7 +1,7 @@
 # 多阶段构建 Dockerfile
 
 # Stage 1: Build the frontend (Vue3 + Vite)
-FROM node:18-alpine AS frontend-builder
+FROM node:22-alpine AS frontend-builder
 WORKDIR /app/views
 COPY views/package.json views/package-lock.json* ./
 RUN npm install
@@ -9,7 +9,7 @@ COPY views/ ./
 RUN npm run build
 
 # Stage 2: Build the backend (Go)
-FROM golang:1.21-alpine AS backend-builder
+FROM golang:1.25-alpine AS backend-builder
 WORKDIR /app/server
 COPY server/go.mod server/go.sum* ./
 RUN go mod download
