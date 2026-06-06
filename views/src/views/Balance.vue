@@ -101,7 +101,7 @@
         class="import-alert"
         type="warning"
         :closable="false"
-        title="导入会覆盖当前站点列表；地址重复时保留上游返回中的最后一条。已有相同地址的 Token 和 User ID 会自动保留。"
+        title="导入会覆盖当前站点列表；地址重复时优先保留启用渠道，同状态保留上游返回中的最后一条。已有相同地址的 Token 和 User ID 会自动保留。"
       />
       <el-form :model="importForm" label-width="130px" v-loading="importConfigLoading">
         <el-form-item label="渠道接口 URL">
@@ -407,7 +407,7 @@ const importChannels = async () => {
 
   try {
     await ElMessageBox.confirm(
-      '导入会覆盖当前站点列表，地址重复时保留最后一条。确认继续吗?',
+      '导入会覆盖当前站点列表，地址重复时优先保留启用渠道，同状态保留最后一条。确认继续吗?',
       '确认导入',
       { type: 'warning' }
     )

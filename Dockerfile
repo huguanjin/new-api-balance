@@ -30,6 +30,7 @@ RUN apk --no-cache add ca-certificates tzdata
 COPY --from=backend-builder /app/server/balanceserver ./balanceserver
 COPY --from=backend-builder /app/server/reset-admin-password ./reset-admin-password
 COPY --from=backend-builder /app/server/mongodb_config.yaml ./mongodb_config.yaml
+COPY --from=backend-builder /app/server/views/dist ./views/dist
 
 EXPOSE 3000
 CMD ["./balanceserver"]

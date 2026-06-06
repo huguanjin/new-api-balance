@@ -484,13 +484,13 @@ func existingSitesIndex(ctx context.Context) (existingSiteIndex, error) {
 	for _, site := range sites {
 		key := siteURLDedupKey(site.URL)
 		if key != "" {
-			index.ByURL[key] = site
+			index.ByURL[key] = mergeExistingSiteSettings(index.ByURL[key], site)
 		}
 		if site.ChannelID > 0 {
-			index.ByChannelID[site.ChannelID] = site
+			index.ByChannelID[site.ChannelID] = mergeExistingSiteSettings(index.ByChannelID[site.ChannelID], site)
 		}
 		if name := siteNameDedupKey(site.Name); name != "" {
-			index.ByName[name] = site
+			index.ByName[name] = mergeExistingSiteSettings(index.ByName[name], site)
 		}
 	}
 	return index, nil
@@ -527,8 +527,10 @@ func channelsToSites(channels []upstreamChannel, existingIndex existingSiteIndex
 		applyExistingSiteSettings(&site, channel, key, existingIndex)
 
 		if index, ok := indexByURL[key]; ok {
-			applySiteSettings(&site, sites[index])
-			sites[index] = site
+			if shouldReplaceDuplicateSite(sites[index], site) {
+				applySiteSettings(&site, sites[index])
+				sites[index] = site
+			}
 			result.DuplicateURLCount++
 			continue
 		}
@@ -538,6 +540,23 @@ func channelsToSites(channels []upstreamChannel, existingIndex existingSiteIndex
 
 	result.Sites = sites
 	return result
+}
+
+func shouldReplaceDuplicateSite(current, candidate models.Site) bool {
+	currentEnabled := current.Status == 1
+	candidateEnabled := candidate.Status == 1
+	if currentEnabled != candidateEnabled {
+		return candidateEnabled
+	}
+	return true
+}
+
+func mergeExistingSiteSettings(current, candidate models.Site) models.Site {
+	if current.ID.IsZero() && strings.TrimSpace(current.URL) == "" && current.ChannelID == 0 && strings.TrimSpace(current.Name) == "" {
+		return candidate
+	}
+	applySiteSettings(&current, candidate)
+	return current
 }
 
 func applyExistingSiteSettings(site *models.Site, channel upstreamChannel, urlKey string, existingIndex existingSiteIndex) {
@@ -595,6 +614,13 @@ func siteURLDedupKey(value string) string {
 	parsed.Scheme = strings.ToLower(parsed.Scheme)
 	parsed.Host = strings.ToLower(parsed.Host)
 	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	if parsed.Path == "/api/user/self" {
+		parsed.Path = ""
+	} else if strings.HasSuffix(parsed.Path, "/api/user/self") {
+		parsed.Path = strings.TrimSuffix(parsed.Path, "/api/user/self")
+	}
 	return parsed.String()
 }
 

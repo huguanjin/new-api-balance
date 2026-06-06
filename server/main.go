@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"os"
 	"strings"
 
@@ -19,6 +20,9 @@ func main() {
 	handlers.StartNotificationScheduler()
 
 	r := gin.Default()
+	r.GET("/healthz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
 
 	// API routes
 	api := r.Group("/api")
@@ -43,9 +47,15 @@ func main() {
 		}
 	}
 
-	// Serve static files for frontend embed (if embedding)
-	// r.Static("/assets", "./views/dist/assets")
-	// r.StaticFile("/", "./views/dist/index.html")
+	r.Static("/assets", "./views/dist/assets")
+	r.StaticFile("/", "./views/dist/index.html")
+	r.NoRoute(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/api") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
+			return
+		}
+		c.File("./views/dist/index.html")
+	})
 
 	addr := serverAddress()
 	log.Printf("Server starting on %s", addr)
