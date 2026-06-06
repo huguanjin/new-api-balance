@@ -16,6 +16,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
+	handlers.StartNotificationScheduler()
 
 	r := gin.Default()
 
@@ -30,6 +31,14 @@ func main() {
 		{
 			protected.GET("/sites", handlers.GetSitesHandler)
 			protected.POST("/sites", handlers.SaveSitesHandler)
+			protected.POST("/balance/query", handlers.QueryBalanceHandler)
+			protected.GET("/channels/import-config", handlers.GetChannelImportConfigHandler)
+			protected.PUT("/channels/import-config", handlers.SaveChannelImportConfigHandler)
+			protected.POST("/channels/import", handlers.ImportChannelsHandler)
+			protected.GET("/notification", handlers.GetNotificationConfigHandler)
+			protected.PUT("/notification", handlers.SaveNotificationConfigHandler)
+			protected.POST("/notification/test", handlers.TestNotificationHandler)
+			protected.POST("/notification/send-now", handlers.SendBalanceNotificationNowHandler)
 			protected.Any("/proxy", handlers.ProxyHandler)
 		}
 	}

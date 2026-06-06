@@ -18,9 +18,11 @@ import (
 )
 
 var (
-	MongoClient *mongo.Client
-	UserCol     *mongo.Collection
-	SiteCol     *mongo.Collection
+	MongoClient            *mongo.Client
+	UserCol                *mongo.Collection
+	SiteCol                *mongo.Collection
+	NotificationConfigCol  *mongo.Collection
+	ChannelImportConfigCol *mongo.Collection
 )
 
 type mongoConfigFile struct {
@@ -55,6 +57,8 @@ func InitDB() error {
 	db := client.Database(databaseName)
 	UserCol = db.Collection("users")
 	SiteCol = db.Collection("sites")
+	NotificationConfigCol = db.Collection("notification_configs")
+	ChannelImportConfigCol = db.Collection("channel_import_configs")
 
 	// Ensure admin exists
 	err = ensureAdminExists()

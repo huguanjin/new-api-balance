@@ -8,6 +8,7 @@ services:
       - "3000:3000"
     environment:
       PORT: "3000"
+      TZ: "Asia/Shanghai"
       MONGO_URI: "mongodb://mongodb:27017/"
       MONGO_DATABASE: "NewapiBalance"
     depends_on:

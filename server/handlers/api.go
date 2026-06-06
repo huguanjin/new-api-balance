@@ -2,9 +2,14 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,11 +18,15 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"golang.org/x/crypto/bcrypt"
 )
 
 var jwtKey = []byte("your_secret_key_change_me_in_production")
+
+const channelImportConfigID = "default_channel_import"
 
 type Claims struct {
 	Username string `json:"username"`
@@ -27,6 +36,42 @@ type Claims struct {
 type LoginRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
+}
+
+type ImportChannelsRequest struct {
+	URL    string `json:"url" binding:"required"`
+	Token  string `json:"token" binding:"required"`
+	UserID string `json:"userId"`
+}
+
+type QueryBalanceRequest struct {
+	ID string `json:"id" binding:"required"`
+}
+
+type upstreamChannel struct {
+	ID      int    `json:"id"`
+	Status  int    `json:"status"`
+	Name    string `json:"name"`
+	BaseURL string `json:"base_url"`
+}
+
+type upstreamChannelResponse struct {
+	Data struct {
+		Items []upstreamChannel `json:"items"`
+	} `json:"data"`
+	Items []upstreamChannel `json:"items"`
+}
+
+type existingSiteIndex struct {
+	ByURL       map[string]models.Site
+	ByChannelID map[int]models.Site
+	ByName      map[string]models.Site
+}
+
+type channelImportResult struct {
+	Sites             []models.Site
+	DuplicateURLCount int
+	InvalidURLCount   int
 }
 
 func LoginHandler(c *gin.Context) {
@@ -164,6 +209,397 @@ func SaveSitesHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Sites saved successfully"})
+}
+
+func QueryBalanceHandler(c *gin.Context) {
+	var req QueryBalanceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return
+	}
+	objectID, err := primitive.ObjectIDFromHex(strings.TrimSpace(req.ID))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid site id"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	var site models.Site
+	if err := SiteCol.FindOne(ctx, bson.M{"_id": objectID}).Decode(&site); err != nil {
+		if err == mongo.ErrNoDocuments {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Site not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load site"})
+		return
+	}
+	if strings.TrimSpace(site.Token) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Token is required"})
+		return
+	}
+
+	result := querySiteBalance(ctx, site)
+	c.JSON(http.StatusOK, gin.H{
+		"ok":      result.OK,
+		"balance": result.Balance,
+		"error":   result.Error,
+	})
+}
+
+func GetChannelImportConfigHandler(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	config, err := loadChannelImportConfig(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load channel import config"})
+		return
+	}
+
+	c.JSON(http.StatusOK, config)
+}
+
+func SaveChannelImportConfigHandler(c *gin.Context) {
+	var req ImportChannelsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return
+	}
+
+	config := models.ChannelImportConfig{
+		URL:    strings.TrimSpace(req.URL),
+		Token:  strings.TrimSpace(req.Token),
+		UserID: strings.TrimSpace(req.UserID),
+	}
+	if err := validateChannelImportConfig(config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := saveChannelImportConfig(ctx, config); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save channel import config: " + err.Error()})
+		return
+	}
+
+	config.ID = channelImportConfigID
+	config.UpdatedAt = time.Now()
+	c.JSON(http.StatusOK, config)
+}
+
+func ImportChannelsHandler(c *gin.Context) {
+	var req ImportChannelsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return
+	}
+
+	config := models.ChannelImportConfig{
+		URL:    strings.TrimSpace(req.URL),
+		Token:  strings.TrimSpace(req.Token),
+		UserID: strings.TrimSpace(req.UserID),
+	}
+	if err := validateChannelImportConfig(config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := saveChannelImportConfig(ctx, config); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save channel import config: " + err.Error()})
+		return
+	}
+
+	channels, err := fetchUpstreamChannels(ctx, config.URL, config.Token, config.UserID)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+
+	existingIndex, err := existingSitesIndex(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch existing sites"})
+		return
+	}
+
+	importResult := channelsToSites(channels, existingIndex)
+	if err := replaceSites(ctx, importResult.Sites); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save imported sites"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":             "Channels imported successfully",
+		"source_count":        len(channels),
+		"imported_count":      len(importResult.Sites),
+		"duplicate_url_count": importResult.DuplicateURLCount,
+		"invalid_url_count":   importResult.InvalidURLCount,
+	})
+}
+
+func loadChannelImportConfig(ctx context.Context) (models.ChannelImportConfig, error) {
+	config := models.ChannelImportConfig{
+		ID:     channelImportConfigID,
+		UserID: "1",
+	}
+	err := ChannelImportConfigCol.FindOne(ctx, bson.M{"_id": channelImportConfigID}).Decode(&config)
+	if err == mongo.ErrNoDocuments {
+		return config, nil
+	}
+	if err != nil {
+		return config, err
+	}
+	return config, nil
+}
+
+func saveChannelImportConfig(ctx context.Context, config models.ChannelImportConfig) error {
+	now := time.Now()
+	update := bson.M{
+		"url":        strings.TrimSpace(config.URL),
+		"token":      strings.TrimSpace(config.Token),
+		"userId":     strings.TrimSpace(config.UserID),
+		"updated_at": now,
+	}
+	opts := options.Update().SetUpsert(true)
+	_, err := ChannelImportConfigCol.UpdateOne(ctx, bson.M{"_id": channelImportConfigID}, bson.M{"$set": update}, opts)
+	return err
+}
+
+func validateChannelImportConfig(config models.ChannelImportConfig) error {
+	if strings.TrimSpace(config.URL) == "" {
+		return errors.New("请填写上游渠道接口 URL")
+	}
+	if strings.TrimSpace(config.Token) == "" {
+		return errors.New("请填写 Bearer Token")
+	}
+
+	parsed, err := url.Parse(strings.TrimSpace(config.URL))
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return errors.New("上游渠道接口 URL 必须是完整的 http:// 或 https:// 地址")
+	}
+	return nil
+}
+
+func fetchUpstreamChannels(ctx context.Context, channelURL, token, userID string) ([]upstreamChannel, error) {
+	parsed, err := url.Parse(channelURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid upstream url: %w", err)
+	}
+
+	query := parsed.Query()
+	shouldPaginate := query.Has("p") || query.Has("page_size")
+	if !shouldPaginate {
+		return fetchUpstreamChannelPage(ctx, channelURL, token, userID)
+	}
+
+	page := positiveIntQuery(query, "p", 1)
+	pageSize := positiveIntQuery(query, "page_size", 100)
+	channels := make([]upstreamChannel, 0, pageSize)
+
+	for currentPage := page; currentPage < page+1000; currentPage++ {
+		query.Set("p", strconv.Itoa(currentPage))
+		parsed.RawQuery = query.Encode()
+
+		items, err := fetchUpstreamChannelPage(ctx, parsed.String(), token, userID)
+		if err != nil {
+			return nil, err
+		}
+		channels = append(channels, items...)
+		if len(items) == 0 || len(items) < pageSize {
+			break
+		}
+	}
+
+	return channels, nil
+}
+
+func fetchUpstreamChannelPage(ctx context.Context, channelURL, token, userID string) ([]upstreamChannel, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, channelURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create upstream request: %w", err)
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Authorization", normalizeBearerToken(token))
+	if strings.TrimSpace(userID) != "" {
+		request.Header.Set("new-api-user", strings.TrimSpace(userID))
+	}
+
+	response, err := notificationHTTPClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to request upstream channels: %w", err)
+	}
+	defer response.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(response.Body, 10<<20))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read upstream response: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("upstream returned http status %d: %s", response.StatusCode, compactBody(body))
+	}
+
+	var payload upstreamChannelResponse
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("failed to parse upstream response: %w", err)
+	}
+	if len(payload.Data.Items) > 0 {
+		return payload.Data.Items, nil
+	}
+	if len(payload.Items) > 0 {
+		return payload.Items, nil
+	}
+	return []upstreamChannel{}, nil
+}
+
+func positiveIntQuery(query url.Values, key string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(query.Get(key)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func existingSitesIndex(ctx context.Context) (existingSiteIndex, error) {
+	cursor, err := SiteCol.Find(ctx, bson.M{})
+	if err != nil {
+		return existingSiteIndex{}, err
+	}
+	defer cursor.Close(ctx)
+
+	var sites []models.Site
+	if err := cursor.All(ctx, &sites); err != nil {
+		return existingSiteIndex{}, err
+	}
+
+	index := existingSiteIndex{
+		ByURL:       make(map[string]models.Site, len(sites)),
+		ByChannelID: make(map[int]models.Site, len(sites)),
+		ByName:      make(map[string]models.Site, len(sites)),
+	}
+	for _, site := range sites {
+		key := siteURLDedupKey(site.URL)
+		if key != "" {
+			index.ByURL[key] = site
+		}
+		if site.ChannelID > 0 {
+			index.ByChannelID[site.ChannelID] = site
+		}
+		if name := siteNameDedupKey(site.Name); name != "" {
+			index.ByName[name] = site
+		}
+	}
+	return index, nil
+}
+
+func channelsToSites(channels []upstreamChannel, existingIndex existingSiteIndex) channelImportResult {
+	sites := make([]models.Site, 0, len(channels))
+	indexByURL := make(map[string]int, len(channels))
+	result := channelImportResult{}
+
+	for _, channel := range channels {
+		siteURL, err := normalizeSiteURLForRequest(channel.BaseURL)
+		if err != nil {
+			result.InvalidURLCount++
+			continue
+		}
+
+		key := siteURLDedupKey(siteURL)
+		if key == "" {
+			result.InvalidURLCount++
+			continue
+		}
+
+		site := models.Site{
+			ChannelID: channel.ID,
+			Status:    channel.Status,
+			Name:      strings.TrimSpace(channel.Name),
+			URL:       siteURL,
+		}
+		if site.Name == "" {
+			site.Name = siteURL
+		}
+
+		applyExistingSiteSettings(&site, channel, key, existingIndex)
+
+		if index, ok := indexByURL[key]; ok {
+			applySiteSettings(&site, sites[index])
+			sites[index] = site
+			result.DuplicateURLCount++
+			continue
+		}
+		indexByURL[key] = len(sites)
+		sites = append(sites, site)
+	}
+
+	result.Sites = sites
+	return result
+}
+
+func applyExistingSiteSettings(site *models.Site, channel upstreamChannel, urlKey string, existingIndex existingSiteIndex) {
+	if existing, ok := existingIndex.ByURL[urlKey]; ok {
+		applySiteSettings(site, existing)
+		return
+	}
+	if existing, ok := existingIndex.ByChannelID[channel.ID]; ok {
+		applySiteSettings(site, existing)
+		return
+	}
+	if existing, ok := existingIndex.ByName[siteNameDedupKey(channel.Name)]; ok {
+		applySiteSettings(site, existing)
+	}
+}
+
+func applySiteSettings(site *models.Site, existing models.Site) {
+	if strings.TrimSpace(site.Token) == "" {
+		site.Token = existing.Token
+	}
+	if strings.TrimSpace(site.UserID) == "" {
+		site.UserID = existing.UserID
+	}
+	if strings.TrimSpace(site.Adapter) == "" {
+		site.Adapter = existing.Adapter
+	}
+}
+
+func replaceSites(ctx context.Context, sites []models.Site) error {
+	if _, err := SiteCol.DeleteMany(ctx, bson.M{}); err != nil {
+		return err
+	}
+	if len(sites) == 0 {
+		return nil
+	}
+
+	docs := make([]interface{}, 0, len(sites))
+	for _, site := range sites {
+		docs = append(docs, site)
+	}
+	_, err := SiteCol.InsertMany(ctx, docs)
+	return err
+}
+
+func siteURLDedupKey(value string) string {
+	normalized, err := normalizeSiteURLForRequest(value)
+	if err != nil {
+		return strings.ToLower(strings.TrimRight(strings.TrimSpace(value), "/"))
+	}
+
+	parsed, err := url.Parse(normalized)
+	if err != nil {
+		return strings.ToLower(strings.TrimRight(strings.TrimSpace(normalized), "/"))
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	return parsed.String()
+}
+
+func siteNameDedupKey(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func ProxyHandler(c *gin.Context) {
