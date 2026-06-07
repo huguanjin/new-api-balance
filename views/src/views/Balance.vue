@@ -79,6 +79,7 @@
             <el-option label="默认（New API）" value="" />
             <el-option label="青山" value="qingshan" />
             <el-option label="ePhone" value="ephone" />
+            <el-option label="grisa" value="grisa" />
           </el-select>
         </el-form-item>
         <el-form-item label="Token">
@@ -723,6 +724,7 @@ const siteAdapterLabel = (adapter) => {
   const value = (adapter || '').trim().toLowerCase()
   if (value === 'qingshan') return '青山'
   if (value === 'ephone') return 'ePhone'
+  if (value === 'grisa') return 'grisa'
   return '默认'
 }
 

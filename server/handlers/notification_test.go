@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -65,5 +66,54 @@ func TestValidateNotificationSchedulesRejectsOverlap(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected overlapping schedules to be rejected")
+	}
+}
+
+func TestGrisaBalancePayloadUsesCredits(t *testing.T) {
+	quota, _, err := parseBalancePayload([]byte(`{"code":0,"data":{"credits":7144660},"msg":"success"}`), siteAdapterGrisa)
+	if err != nil {
+		t.Fatalf("expected grisa payload to parse: %v", err)
+	}
+
+	balance := quotaToUSD(quota)
+	if math.Abs(balance-357.233) > 0.000001 {
+		t.Fatalf("expected balance 357.233, got %.3f", balance)
+	}
+}
+
+func TestGrisaBalanceEndpoint(t *testing.T) {
+	endpoint, err := siteBalanceEndpoint(models.Site{
+		URL:     "https://grsaiapi.com",
+		Adapter: siteAdapterGrisa,
+	})
+	if err != nil {
+		t.Fatalf("expected grisa endpoint to build: %v", err)
+	}
+	if endpoint != "https://grsaiapi.com/client/openapi/getCredits" {
+		t.Fatalf("unexpected grisa endpoint: %s", endpoint)
+	}
+}
+
+func TestGrisaBalanceEndpointUsesDefaultHost(t *testing.T) {
+	endpoint, err := siteBalanceEndpoint(models.Site{
+		URL:     "https://grsai.com",
+		Adapter: siteAdapterGrisa,
+	})
+	if err != nil {
+		t.Fatalf("expected grisa endpoint to build: %v", err)
+	}
+	if endpoint != siteAdapterGrisaEndpoint {
+		t.Fatalf("unexpected grisa endpoint: %s", endpoint)
+	}
+}
+
+func TestGrisaNotificationEligibilityDoesNotRequireUserID(t *testing.T) {
+	eligible := siteEligibleForBalanceNotification(models.Site{
+		Status:  1,
+		Token:   "token",
+		Adapter: siteAdapterGrisa,
+	})
+	if !eligible {
+		t.Fatal("expected grisa site with token to be eligible without user id")
 	}
 }

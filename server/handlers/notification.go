@@ -34,6 +34,8 @@ const (
 	maxNotificationScheduleInterval   = 1440
 	siteAdapterQingshan               = "qingshan"
 	siteAdapterEPhone                 = "ephone"
+	siteAdapterGrisa                  = "grisa"
+	siteAdapterGrisaEndpoint          = "https://grsaiapi.com/client/openapi/getCredits"
 )
 
 var (
@@ -355,7 +357,13 @@ func queryAllSiteBalances(ctx context.Context) ([]balanceResult, error) {
 }
 
 func siteEligibleForBalanceNotification(site models.Site) bool {
-	return site.Status == 1 && strings.TrimSpace(site.Token) != "" && strings.TrimSpace(site.UserID) != ""
+	if site.Status != 1 || strings.TrimSpace(site.Token) == "" {
+		return false
+	}
+	if siteAdapter(site) == siteAdapterGrisa {
+		return true
+	}
+	return strings.TrimSpace(site.UserID) != ""
 }
 
 func querySiteBalance(ctx context.Context, site models.Site) balanceResult {
@@ -374,18 +382,10 @@ func querySiteBalance(ctx context.Context, site models.Site) balanceResult {
 		return result
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := newBalanceRequest(ctx, site, endpoint)
 	if err != nil {
 		result.Error = "failed to create request"
 		return result
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "NewApiBalance/1.0")
-	if auth := normalizeBearerToken(site.Token); auth != "" {
-		req.Header.Set("Authorization", auth)
-	}
-	if userID := strings.TrimSpace(site.UserID); userID != "" {
-		req.Header.Set("New-Api-User", userID)
 	}
 
 	resp, err := notificationHTTPClient.Do(req)
@@ -419,6 +419,39 @@ func querySiteBalance(ctx context.Context, site models.Site) balanceResult {
 	return result
 }
 
+func newBalanceRequest(ctx context.Context, site models.Site, endpoint string) (*http.Request, error) {
+	if siteAdapter(site) == siteAdapterGrisa {
+		body, err := json.Marshal(map[string]string{
+			"token": strings.TrimSpace(site.Token),
+		})
+		if err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", "NewApiBalance/1.0")
+		return req, nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "NewApiBalance/1.0")
+	if auth := normalizeBearerToken(site.Token); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+	if userID := strings.TrimSpace(site.UserID); userID != "" {
+		req.Header.Set("New-Api-User", userID)
+	}
+	return req, nil
+}
+
 func siteBalanceEndpoint(site models.Site) (string, error) {
 	normalized, err := normalizeSiteURLForRequest(site.URL)
 	if err != nil {
@@ -428,6 +461,12 @@ func siteBalanceEndpoint(site models.Site) (string, error) {
 	parsed, err := url.Parse(normalized)
 	if err != nil {
 		return "", err
+	}
+	if siteAdapter(site) == siteAdapterGrisa {
+		if strings.TrimRight(parsed.Path, "/") == "/client/openapi/getCredits" {
+			return normalized, nil
+		}
+		return siteAdapterGrisaEndpoint, nil
 	}
 	if strings.TrimRight(parsed.Path, "/") == "/api/user/self" {
 		return normalized, nil
@@ -458,6 +497,14 @@ func parseBalancePayload(body []byte, adapter string) (float64, float64, error) 
 			return 0, 0, errors.New("response does not contain balance")
 		}
 		return balanceToQuota(balance * 7), 0, nil
+	}
+
+	if adapter == siteAdapterGrisa {
+		credits, ok := numberFromMap(data, "credits")
+		if !ok {
+			return 0, 0, errors.New("response does not contain credits")
+		}
+		return balanceToQuota(credits / 20000), 0, nil
 	}
 
 	quota, ok := numberFromMap(data, "quota")
