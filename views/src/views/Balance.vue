@@ -172,14 +172,41 @@
             />
           </el-form-item>
         </template>
-        <el-form-item label="推送间隔">
-          <el-input-number
-            v-model="notificationConfig.interval_minutes"
-            :min="1"
-            :max="10080"
-            :step="10"
-          />
-          <span class="form-suffix">分钟</span>
+        <el-form-item label="推送计划">
+          <div class="schedule-list">
+            <div
+              v-for="(schedule, index) in notificationConfig.schedules"
+              :key="index"
+              class="schedule-row"
+            >
+              <el-time-picker
+                v-model="schedule.start_time"
+                format="HH:mm"
+                value-format="HH:mm"
+                placeholder="开始"
+                style="width: 120px"
+              />
+              <span class="schedule-separator">至</span>
+              <el-time-picker
+                v-model="schedule.end_time"
+                format="HH:mm"
+                value-format="HH:mm"
+                placeholder="结束"
+                style="width: 120px"
+              />
+              <el-input-number
+                v-model="schedule.interval_minutes"
+                :min="1"
+                :max="1440"
+                :step="10"
+                controls-position="right"
+                style="width: 130px"
+              />
+              <span class="form-suffix">分钟</span>
+              <el-button type="danger" link @click="removeNotificationSchedule(index)">删除</el-button>
+            </div>
+            <el-button @click="addNotificationSchedule">添加计划</el-button>
+          </div>
         </el-form-item>
         <el-form-item label="低余额阈值">
           <el-input-number
@@ -250,10 +277,21 @@ const defaultNotificationConfig = () => ({
   sign_key: '',
   wework_webhook_url: '',
   interval_minutes: 60,
+  schedules: [],
   balance_threshold: 0,
   last_attempt_at: '',
   last_sent_at: '',
   last_error: ''
+})
+
+const normalizeNotificationConfigData = (data = {}) => ({
+  ...defaultNotificationConfig(),
+  ...data,
+  schedules: (data?.schedules || []).map(schedule => ({
+    start_time: schedule.start_time || '',
+    end_time: schedule.end_time || '',
+    interval_minutes: Number(schedule.interval_minutes || 60)
+  }))
 })
 
 const notificationDialogVisible = ref(false)
@@ -273,7 +311,11 @@ const notificationTypeLabel = computed(() => (
 const notificationStatusTitle = computed(() => {
   const threshold = Number(notificationConfig.value.balance_threshold || 0)
   const thresholdText = threshold > 0 ? `，仅推送低于 ${threshold.toFixed(2)} USD 的渠道` : '，推送全部渠道'
-  return `余额通知已启用，每 ${notificationConfig.value.interval_minutes} 分钟推送至 ${notificationTypeLabel.value}${thresholdText}`
+  const scheduleCount = notificationConfig.value.schedules?.length || 0
+  const scheduleText = scheduleCount > 0
+    ? `${scheduleCount} 个推送计划`
+    : `每 ${notificationConfig.value.interval_minutes} 分钟`
+  return `余额通知已启用，${scheduleText}推送至 ${notificationTypeLabel.value}${thresholdText}`
 })
 
 const filteredSites = computed(() => {
@@ -305,10 +347,7 @@ const fetchNotificationConfig = async () => {
     const res = await axios.get('/api/notification', {
       headers: authHeaders()
     })
-    notificationConfig.value = {
-      ...defaultNotificationConfig(),
-      ...res.data
-    }
+    notificationConfig.value = normalizeNotificationConfigData(res.data)
   } catch (err) {
     if (err.response?.status === 401) {
       logout()
@@ -560,6 +599,31 @@ const openNotificationDialog = async () => {
   notificationLoading.value = false
 }
 
+const addNotificationSchedule = () => {
+  const schedules = notificationConfig.value.schedules || []
+  const lastSchedule = schedules[schedules.length - 1]
+  const startTime = lastSchedule?.end_time || '08:00'
+  notificationConfig.value.schedules = [
+    ...schedules,
+    {
+      start_time: startTime,
+      end_time: addMinutesToTime(startTime, 60),
+      interval_minutes: Number(notificationConfig.value.interval_minutes || 60)
+    }
+  ]
+}
+
+const removeNotificationSchedule = (index) => {
+  notificationConfig.value.schedules = (notificationConfig.value.schedules || []).filter((_, i) => i !== index)
+}
+
+const addMinutesToTime = (timeText, minutesToAdd) => {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(timeText || '')
+  if (!match) return '09:00'
+  const total = ((Number(match[1]) * 60 + Number(match[2]) + minutesToAdd) % (24 * 60) + (24 * 60)) % (24 * 60)
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+}
+
 const notificationPayload = () => ({
   enabled: notificationConfig.value.enabled,
   notification_type: notificationConfig.value.notification_type,
@@ -567,8 +631,17 @@ const notificationPayload = () => ({
   sign_key: notificationConfig.value.sign_key,
   wework_webhook_url: notificationConfig.value.wework_webhook_url,
   interval_minutes: notificationConfig.value.interval_minutes,
+  schedules: notificationSchedulesPayload(),
   balance_threshold: Number(notificationConfig.value.balance_threshold || 0)
 })
+
+const notificationSchedulesPayload = () => (
+  (notificationConfig.value.schedules || []).map(schedule => ({
+    start_time: schedule.start_time || '',
+    end_time: schedule.end_time || '',
+    interval_minutes: Number(schedule.interval_minutes || 0)
+  }))
+)
 
 const saveNotificationConfig = async (silent = false) => {
   if (typeof silent !== 'boolean') {
@@ -579,10 +652,7 @@ const saveNotificationConfig = async (silent = false) => {
     const res = await axios.put('/api/notification', notificationPayload(), {
       headers: authHeaders()
     })
-    notificationConfig.value = {
-      ...defaultNotificationConfig(),
-      ...res.data
-    }
+    notificationConfig.value = normalizeNotificationConfigData(res.data)
     if (!silent) {
       ElMessage.success('通知配置已保存')
     }
@@ -771,6 +841,24 @@ onMounted(() => {
 
 .form-suffix {
   margin-left: 8px;
+  color: #606266;
+}
+
+.schedule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.schedule-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.schedule-separator {
   color: #606266;
 }
 

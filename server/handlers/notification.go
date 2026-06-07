@@ -30,6 +30,8 @@ const (
 	notificationConfigID              = "balance_notification"
 	defaultNotificationIntervalMinute = 60
 	maxNotificationIntervalMinute     = 10080
+	maxNotificationSchedules          = 24
+	maxNotificationScheduleInterval   = 1440
 	siteAdapterQingshan               = "qingshan"
 	siteAdapterEPhone                 = "ephone"
 )
@@ -64,13 +66,14 @@ type balanceNotificationSummary struct {
 }
 
 type notificationConfigRequest struct {
-	Enabled          bool    `json:"enabled"`
-	NotificationType string  `json:"notification_type"`
-	WebhookURL       string  `json:"webhook_url"`
-	SignKey          string  `json:"sign_key"`
-	WeworkWebhookURL string  `json:"wework_webhook_url"`
-	IntervalMinutes  int     `json:"interval_minutes"`
-	BalanceThreshold float64 `json:"balance_threshold"`
+	Enabled          bool                          `json:"enabled"`
+	NotificationType string                        `json:"notification_type"`
+	WebhookURL       string                        `json:"webhook_url"`
+	SignKey          string                        `json:"sign_key"`
+	WeworkWebhookURL string                        `json:"wework_webhook_url"`
+	IntervalMinutes  int                           `json:"interval_minutes"`
+	Schedules        []models.NotificationSchedule `json:"schedules"`
+	BalanceThreshold float64                       `json:"balance_threshold"`
 }
 
 func GetNotificationConfigHandler(c *gin.Context) {
@@ -100,6 +103,7 @@ func SaveNotificationConfigHandler(c *gin.Context) {
 		SignKey:          req.SignKey,
 		WeworkWebhookURL: req.WeworkWebhookURL,
 		IntervalMinutes:  req.IntervalMinutes,
+		Schedules:        req.Schedules,
 		BalanceThreshold: req.BalanceThreshold,
 	}
 	normalizeNotificationConfig(&config)
@@ -125,6 +129,7 @@ func SaveNotificationConfigHandler(c *gin.Context) {
 		"sign_key":           config.SignKey,
 		"wework_webhook_url": config.WeworkWebhookURL,
 		"interval_minutes":   config.IntervalMinutes,
+		"schedules":          config.Schedules,
 		"balance_threshold":  config.BalanceThreshold,
 		"last_attempt_at":    existing.LastAttemptAt,
 		"last_sent_at":       existing.LastSentAt,
@@ -248,11 +253,62 @@ func runScheduledBalanceNotification() {
 }
 
 func notificationDue(config models.NotificationConfig, now time.Time) bool {
+	schedule, scheduleStart, ok := activeNotificationSchedule(config.Schedules, now)
+	if len(config.Schedules) > 0 && !ok {
+		return false
+	}
+
+	intervalMinutes := config.IntervalMinutes
+	if ok {
+		intervalMinutes = schedule.IntervalMinutes
+	}
 	if config.LastAttemptAt == nil {
 		return true
 	}
-	interval := time.Duration(config.IntervalMinutes) * time.Minute
+	if ok && config.LastAttemptAt.Before(scheduleStart) {
+		return true
+	}
+	interval := time.Duration(intervalMinutes) * time.Minute
 	return now.Sub(*config.LastAttemptAt) >= interval
+}
+
+func activeNotificationSchedule(schedules []models.NotificationSchedule, now time.Time) (models.NotificationSchedule, time.Time, bool) {
+	nowMinute := now.Hour()*60 + now.Minute()
+	for _, schedule := range schedules {
+		startMinute, ok := parseClockMinutes(schedule.StartTime)
+		if !ok {
+			continue
+		}
+		endMinute, ok := parseClockMinutes(schedule.EndTime)
+		if !ok {
+			continue
+		}
+		if !minuteInSchedule(nowMinute, startMinute, endMinute) {
+			continue
+		}
+		return schedule, scheduleStartTime(now, startMinute, endMinute), true
+	}
+	return models.NotificationSchedule{}, time.Time{}, false
+}
+
+func minuteInSchedule(minute, startMinute, endMinute int) bool {
+	if startMinute == endMinute {
+		return false
+	}
+	if startMinute < endMinute {
+		return minute >= startMinute && minute < endMinute
+	}
+	return minute >= startMinute || minute < endMinute
+}
+
+func scheduleStartTime(now time.Time, startMinute, endMinute int) time.Time {
+	year, month, day := now.Date()
+	start := time.Date(year, month, day, startMinute/60, startMinute%60, 0, 0, now.Location())
+	nowMinute := now.Hour()*60 + now.Minute()
+	if startMinute > endMinute && nowMinute < endMinute {
+		return start.AddDate(0, 0, -1)
+	}
+	return start
 }
 
 func sendBalanceNotification(ctx context.Context, config models.NotificationConfig) (balanceNotificationSummary, error) {
@@ -860,12 +916,48 @@ func normalizeNotificationConfig(config *models.NotificationConfig) {
 	if config.IntervalMinutes > maxNotificationIntervalMinute {
 		config.IntervalMinutes = maxNotificationIntervalMinute
 	}
+	config.Schedules = normalizeNotificationSchedules(config.Schedules)
 	if config.BalanceThreshold < 0 {
 		config.BalanceThreshold = 0
 	}
 }
 
+func normalizeNotificationSchedules(schedules []models.NotificationSchedule) []models.NotificationSchedule {
+	if len(schedules) == 0 {
+		return nil
+	}
+	normalized := make([]models.NotificationSchedule, 0, len(schedules))
+	for _, schedule := range schedules {
+		startMinute, startOK := parseClockMinutes(schedule.StartTime)
+		endMinute, endOK := parseClockMinutes(schedule.EndTime)
+		interval := schedule.IntervalMinutes
+		if interval <= 0 {
+			interval = defaultNotificationIntervalMinute
+		}
+		if interval > maxNotificationScheduleInterval {
+			interval = maxNotificationScheduleInterval
+		}
+
+		if startOK {
+			schedule.StartTime = formatClockMinutes(startMinute)
+		} else {
+			schedule.StartTime = strings.TrimSpace(schedule.StartTime)
+		}
+		if endOK {
+			schedule.EndTime = formatClockMinutes(endMinute)
+		} else {
+			schedule.EndTime = strings.TrimSpace(schedule.EndTime)
+		}
+		schedule.IntervalMinutes = interval
+		normalized = append(normalized, schedule)
+	}
+	return normalized
+}
+
 func validateNotificationConfig(config models.NotificationConfig, requireWebhook bool) error {
+	if err := validateNotificationSchedules(config.Schedules); err != nil {
+		return err
+	}
 	if !requireWebhook {
 		return nil
 	}
@@ -873,6 +965,74 @@ func validateNotificationConfig(config models.NotificationConfig, requireWebhook
 		return validateWebhookURL(config.WeworkWebhookURL, "企业微信 Webhook URL")
 	}
 	return validateWebhookURL(config.WebhookURL, "飞书 Webhook URL")
+}
+
+func validateNotificationSchedules(schedules []models.NotificationSchedule) error {
+	if len(schedules) > maxNotificationSchedules {
+		return fmt.Errorf("推送计划最多配置 %d 个", maxNotificationSchedules)
+	}
+	occupied := make([]int, 24*60)
+	for index, schedule := range schedules {
+		startMinute, ok := parseClockMinutes(schedule.StartTime)
+		if !ok {
+			return fmt.Errorf("第 %d 个推送计划的开始时间无效", index+1)
+		}
+		endMinute, ok := parseClockMinutes(schedule.EndTime)
+		if !ok {
+			return fmt.Errorf("第 %d 个推送计划的结束时间无效", index+1)
+		}
+		if startMinute == endMinute {
+			return fmt.Errorf("第 %d 个推送计划的开始时间和结束时间不能相同", index+1)
+		}
+		if schedule.IntervalMinutes <= 0 || schedule.IntervalMinutes > maxNotificationScheduleInterval {
+			return fmt.Errorf("第 %d 个推送计划的推送频率必须在 1 到 %d 分钟之间", index+1, maxNotificationScheduleInterval)
+		}
+
+		for _, minute := range scheduleMinutes(startMinute, endMinute) {
+			if occupied[minute] > 0 {
+				return fmt.Errorf("第 %d 个推送计划与第 %d 个推送计划时间重叠", index+1, occupied[minute])
+			}
+			occupied[minute] = index + 1
+		}
+	}
+	return nil
+}
+
+func scheduleMinutes(startMinute, endMinute int) []int {
+	minutes := make([]int, 0, 24*60)
+	if startMinute < endMinute {
+		for minute := startMinute; minute < endMinute; minute++ {
+			minutes = append(minutes, minute)
+		}
+		return minutes
+	}
+	for minute := startMinute; minute < 24*60; minute++ {
+		minutes = append(minutes, minute)
+	}
+	for minute := 0; minute < endMinute; minute++ {
+		minutes = append(minutes, minute)
+	}
+	return minutes
+}
+
+func parseClockMinutes(value string) (int, bool) {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 2 {
+		return 0, false
+	}
+	hour, err := strconv.Atoi(parts[0])
+	if err != nil || hour < 0 || hour > 23 {
+		return 0, false
+	}
+	minute, err := strconv.Atoi(parts[1])
+	if err != nil || minute < 0 || minute > 59 {
+		return 0, false
+	}
+	return hour*60 + minute, true
+}
+
+func formatClockMinutes(minutes int) string {
+	return fmt.Sprintf("%02d:%02d", minutes/60, minutes%60)
 }
 
 func validateWebhookURL(rawURL, label string) error {

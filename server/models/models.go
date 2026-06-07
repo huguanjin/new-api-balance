@@ -24,18 +24,25 @@ type Site struct {
 }
 
 type NotificationConfig struct {
-	ID               string     `bson:"_id,omitempty" json:"-"`
-	Enabled          bool       `bson:"enabled" json:"enabled"`
-	NotificationType string     `bson:"notification_type" json:"notification_type"`
-	WebhookURL       string     `bson:"webhook_url" json:"webhook_url"`
-	SignKey          string     `bson:"sign_key" json:"sign_key"`
-	WeworkWebhookURL string     `bson:"wework_webhook_url" json:"wework_webhook_url"`
-	IntervalMinutes  int        `bson:"interval_minutes" json:"interval_minutes"`
-	BalanceThreshold float64    `bson:"balance_threshold" json:"balance_threshold"`
-	LastAttemptAt    *time.Time `bson:"last_attempt_at,omitempty" json:"last_attempt_at,omitempty"`
-	LastSentAt       *time.Time `bson:"last_sent_at,omitempty" json:"last_sent_at,omitempty"`
-	LastError        string     `bson:"last_error" json:"last_error"`
-	UpdatedAt        time.Time  `bson:"updated_at" json:"updated_at"`
+	ID               string                 `bson:"_id,omitempty" json:"-"`
+	Enabled          bool                   `bson:"enabled" json:"enabled"`
+	NotificationType string                 `bson:"notification_type" json:"notification_type"`
+	WebhookURL       string                 `bson:"webhook_url" json:"webhook_url"`
+	SignKey          string                 `bson:"sign_key" json:"sign_key"`
+	WeworkWebhookURL string                 `bson:"wework_webhook_url" json:"wework_webhook_url"`
+	IntervalMinutes  int                    `bson:"interval_minutes" json:"interval_minutes"`
+	Schedules        []NotificationSchedule `bson:"schedules" json:"schedules"`
+	BalanceThreshold float64                `bson:"balance_threshold" json:"balance_threshold"`
+	LastAttemptAt    *time.Time             `bson:"last_attempt_at,omitempty" json:"last_attempt_at,omitempty"`
+	LastSentAt       *time.Time             `bson:"last_sent_at,omitempty" json:"last_sent_at,omitempty"`
+	LastError        string                 `bson:"last_error" json:"last_error"`
+	UpdatedAt        time.Time              `bson:"updated_at" json:"updated_at"`
+}
+
+type NotificationSchedule struct {
+	StartTime       string `bson:"start_time" json:"start_time"`
+	EndTime         string `bson:"end_time" json:"end_time"`
+	IntervalMinutes int    `bson:"interval_minutes" json:"interval_minutes"`
 }
 
 type ChannelImportConfig struct {
