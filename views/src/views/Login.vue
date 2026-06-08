@@ -19,11 +19,12 @@
 
 <script setup>
 import { ref, reactive } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 
 const router = useRouter()
+const route = useRoute()
 const loginFormRef = ref(null)
 const loading = ref(false)
 
@@ -46,7 +47,10 @@ const handleLogin = async () => {
         const response = await axios.post('/api/login', loginForm)
         localStorage.setItem('token', response.data.token)
         ElMessage.success('Login successful')
-        router.push('/balance')
+        const redirect = typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/')
+          ? route.query.redirect
+          : '/balance'
+        router.push(redirect)
       } catch (error) {
         ElMessage.error(error.response?.data?.error || 'Login failed')
       } finally {

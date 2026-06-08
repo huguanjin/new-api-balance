@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,6 +48,7 @@ type modelDetectionConfigRequest struct {
 	AutoDetectEnabled bool                          `json:"autoDetectEnabled"`
 	VeridropURL       string                        `json:"veridropUrl"`
 	VeridropAPIToken  string                        `json:"veridropApiToken"`
+	ReportBaseURL     string                        `json:"reportBaseUrl"`
 	NotificationType  string                        `json:"notification_type"`
 	WebhookURL        string                        `json:"webhook_url"`
 	SignKey           string                        `json:"sign_key"`
@@ -154,6 +156,7 @@ func SaveModelDetectionNotificationConfigHandler(c *gin.Context) {
 		AutoDetectEnabled: req.AutoDetectEnabled,
 		VeridropURL:       req.VeridropURL,
 		VeridropAPIToken:  req.VeridropAPIToken,
+		ReportBaseURL:     req.ReportBaseURL,
 		NotificationType:  req.NotificationType,
 		WebhookURL:        req.WebhookURL,
 		SignKey:           req.SignKey,
@@ -183,6 +186,7 @@ func SaveModelDetectionNotificationConfigHandler(c *gin.Context) {
 		"auto_detect_enabled": config.AutoDetectEnabled,
 		"veridrop_url":        config.VeridropURL,
 		"veridrop_api_token":  config.VeridropAPIToken,
+		"report_base_url":     config.ReportBaseURL,
 		"notification_type":   config.NotificationType,
 		"webhook_url":         config.WebhookURL,
 		"sign_key":            config.SignKey,
@@ -810,9 +814,9 @@ func sendModelDetectionNotificationIfNeeded(ctx context.Context, config models.M
 
 func sendModelDetectionJobNotification(ctx context.Context, config models.ModelDetectionNotificationConfig, job models.ModelDetectionJob) error {
 	if config.NotificationType == "wework" {
-		return sendWeworkMarkdownNotification(ctx, config.WeworkWebhookURL, buildWeworkModelDetectionMessage(job))
+		return sendWeworkMarkdownNotification(ctx, config.WeworkWebhookURL, buildWeworkModelDetectionMessage(config, job))
 	}
-	return sendFeishuCardNotification(ctx, config.WebhookURL, buildFeishuModelDetectionCard(job), config.SignKey)
+	return sendFeishuCardNotification(ctx, config.WebhookURL, buildFeishuModelDetectionCard(config, job), config.SignKey)
 }
 
 func sendModelDetectionTestNotification(ctx context.Context, config models.ModelDetectionNotificationConfig) error {
@@ -844,7 +848,7 @@ func sendModelDetectionTestNotification(ctx context.Context, config models.Model
 	return sendFeishuCardNotification(ctx, config.WebhookURL, card, config.SignKey)
 }
 
-func buildFeishuModelDetectionCard(job models.ModelDetectionJob) map[string]interface{} {
+func buildFeishuModelDetectionCard(config models.ModelDetectionNotificationConfig, job models.ModelDetectionJob) map[string]interface{} {
 	template := "green"
 	if job.Status == modelDetectionStatusError || job.Verdict == "failed" {
 		template = "red"
@@ -872,7 +876,7 @@ func buildFeishuModelDetectionCard(job models.ModelDetectionJob) map[string]inte
 			"text": feishuMarkdown(modelDetectionSummaryText(job)),
 		},
 	}
-	if link := modelDetectionReportLink(job); link != "" {
+	if link := modelDetectionReportLink(config, job); link != "" {
 		elements = append(elements, map[string]interface{}{
 			"tag": "action",
 			"actions": []interface{}{
@@ -904,7 +908,7 @@ func buildFeishuModelDetectionCard(job models.ModelDetectionJob) map[string]inte
 	}
 }
 
-func buildWeworkModelDetectionMessage(job models.ModelDetectionJob) string {
+func buildWeworkModelDetectionMessage(config models.ModelDetectionNotificationConfig, job models.ModelDetectionJob) string {
 	color := "info"
 	if job.Status == modelDetectionStatusError || job.Verdict == "failed" {
 		color = "warning"
@@ -920,7 +924,7 @@ func buildWeworkModelDetectionMessage(job models.ModelDetectionJob) string {
 	builder.WriteString(fmt.Sprintf("> 等级：%s\n", valueOrDash(job.TierTitle)))
 	builder.WriteString("\n")
 	builder.WriteString(modelDetectionSummaryText(job))
-	if link := modelDetectionReportLink(job); link != "" {
+	if link := modelDetectionReportLink(config, job); link != "" {
 		builder.WriteString(fmt.Sprintf("\n\n[查看报告](%s)", link))
 	}
 	return builder.String()
@@ -942,16 +946,34 @@ func loadModelDetectionConfig(ctx context.Context) (models.ModelDetectionNotific
 func defaultModelDetectionConfig() models.ModelDetectionNotificationConfig {
 	return models.ModelDetectionNotificationConfig{
 		ID:               modelDetectionConfigID,
-		VeridropURL:      "http://localhost:8000",
+		VeridropURL:      defaultModelDetectionVeridropURL(),
+		ReportBaseURL:    defaultModelDetectionReportBaseURL(),
 		NotificationType: "feishu",
 		IntervalMinutes:  defaultModelDetectionIntervalMinute,
 		PushPolicy:       modelDetectionPushPolicyAll,
 	}
 }
 
+func defaultModelDetectionVeridropURL() string {
+	if value := strings.TrimRight(strings.TrimSpace(os.Getenv("VERIDROP_URL")), "/"); value != "" {
+		return value
+	}
+	return "http://127.0.0.1:8080"
+}
+
+func defaultModelDetectionReportBaseURL() string {
+	for _, key := range []string{"APP_PUBLIC_URL", "PUBLIC_BASE_URL"} {
+		if value := strings.TrimRight(strings.TrimSpace(os.Getenv(key)), "/"); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func normalizeModelDetectionConfig(config *models.ModelDetectionNotificationConfig) {
 	config.VeridropURL = strings.TrimRight(strings.TrimSpace(config.VeridropURL), "/")
 	config.VeridropAPIToken = strings.TrimSpace(config.VeridropAPIToken)
+	config.ReportBaseURL = strings.TrimRight(strings.TrimSpace(config.ReportBaseURL), "/")
 	config.NotificationType = strings.ToLower(strings.TrimSpace(config.NotificationType))
 	if config.NotificationType != "wework" {
 		config.NotificationType = "feishu"
@@ -975,6 +997,11 @@ func normalizeModelDetectionConfig(config *models.ModelDetectionNotificationConf
 func validateModelDetectionConfig(config models.ModelDetectionNotificationConfig, requireWebhook, requireVeridrop bool) error {
 	if requireVeridrop {
 		if err := validateWebhookURL(config.VeridropURL, "Veridrop 服务地址"); err != nil {
+			return err
+		}
+	}
+	if config.ReportBaseURL != "" {
+		if err := validateWebhookURL(config.ReportBaseURL, "报告访问地址"); err != nil {
 			return err
 		}
 	}
@@ -1376,11 +1403,22 @@ func modelDetectionSummaryText(job models.ModelDetectionJob) string {
 	return "报告已生成。"
 }
 
-func modelDetectionReportLink(job models.ModelDetectionJob) string {
-	if strings.TrimSpace(job.ResultURL) != "" {
-		return strings.TrimSpace(job.ResultURL)
+func modelDetectionReportLink(config models.ModelDetectionNotificationConfig, job models.ModelDetectionJob) string {
+	baseURL := strings.TrimRight(strings.TrimSpace(config.ReportBaseURL), "/")
+	if baseURL == "" || job.ID.IsZero() {
+		return ""
 	}
-	return strings.TrimSpace(job.JSONURL)
+
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/model-detection"
+	query := parsed.Query()
+	query.Set("jobId", job.ID.Hex())
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 func formatModelDetectionSite(job models.ModelDetectionJob) string {

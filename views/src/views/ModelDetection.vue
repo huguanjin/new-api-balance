@@ -237,7 +237,7 @@
     <el-dialog title="检测与推送设置" v-model="globalDialogVisible" width="720px">
       <el-form :model="globalConfig" label-width="150px" v-loading="loadingGlobalConfig">
         <el-form-item label="Veridrop 地址">
-          <el-input v-model="globalConfig.veridropUrl" placeholder="http://localhost:8000" />
+          <el-input v-model="globalConfig.veridropUrl" placeholder="http://127.0.0.1:8080" />
         </el-form-item>
         <el-form-item label="Veridrop Token">
           <el-input
@@ -246,6 +246,9 @@
             show-password
             placeholder="系统 API Token，可选"
           />
+        </el-form-item>
+        <el-form-item label="报告访问地址">
+          <el-input v-model="globalConfig.reportBaseUrl" placeholder="https://your-balance.example.com" />
         </el-form-item>
         <el-divider />
         <el-form-item label="启用完成推送">
@@ -440,10 +443,12 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Document, Plus, Promotion, Refresh, Search, Setting, VideoPlay } from '@element-plus/icons-vue'
 import axios from 'axios'
 
+const route = useRoute()
 const sites = ref([])
 const jobs = ref([])
 const loadingSites = ref(false)
@@ -507,6 +512,10 @@ watch(jobSiteFilter, () => {
   fetchJobs()
 })
 
+watch(() => route.query.jobId, () => {
+  openReportFromRoute()
+})
+
 function defaultSiteModelDetection() {
   return {
     enabled: false,
@@ -533,8 +542,9 @@ function defaultGlobalConfig() {
   return {
     enabled: false,
     autoDetectEnabled: false,
-    veridropUrl: 'http://localhost:8000',
+    veridropUrl: 'http://127.0.0.1:8080',
     veridropApiToken: '',
+    reportBaseUrl: defaultReportBaseUrl(),
     notification_type: 'feishu',
     webhook_url: '',
     sign_key: '',
@@ -547,6 +557,10 @@ function defaultGlobalConfig() {
     last_sent_at: '',
     last_error: ''
   }
+}
+
+function defaultReportBaseUrl() {
+  return window.location.origin
 }
 
 function normalizeSite(site) {
@@ -575,9 +589,11 @@ function normalizeSiteConfig(config = {}) {
 }
 
 function normalizeGlobalConfig(config = {}) {
+  const defaults = defaultGlobalConfig()
   return {
-    ...defaultGlobalConfig(),
+    ...defaults,
     ...config,
+    reportBaseUrl: config?.reportBaseUrl || defaults.reportBaseUrl,
     schedules: (config?.schedules || []).map(schedule => ({
       start_time: schedule.start_time || '',
       end_time: schedule.end_time || '',
@@ -727,6 +743,7 @@ function globalConfigPayload() {
     autoDetectEnabled: Boolean(globalConfig.value.autoDetectEnabled),
     veridropUrl: globalConfig.value.veridropUrl.trim(),
     veridropApiToken: globalConfig.value.veridropApiToken.trim(),
+    reportBaseUrl: globalConfig.value.reportBaseUrl.trim(),
     notification_type: globalConfig.value.notification_type,
     webhook_url: globalConfig.value.webhook_url.trim(),
     sign_key: globalConfig.value.sign_key.trim(),
@@ -929,6 +946,16 @@ async function openReportDialog(row) {
   }
 }
 
+async function openReportFromRoute() {
+  const queryJobId = Array.isArray(route.query.jobId) ? route.query.jobId[0] : route.query.jobId
+  const jobId = String(queryJobId || '').trim()
+  if (!jobId) return
+  if (reportDialogVisible.value && activeReportJob.value?.id === jobId) return
+
+  const job = jobs.value.find(item => item.id === jobId) || { id: jobId }
+  await openReportDialog(job)
+}
+
 async function pushReport(row) {
   if (!row?.id) return
   setPushingJob(row.id, true)
@@ -990,8 +1017,9 @@ function handleAuthOrError(err, message) {
   ElMessage.error(err.response?.data?.error || message)
 }
 
-onMounted(() => {
-  refreshAll()
+onMounted(async () => {
+  await refreshAll()
+  await openReportFromRoute()
 })
 </script>
 

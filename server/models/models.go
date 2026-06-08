@@ -78,6 +78,7 @@ type ModelDetectionNotificationConfig struct {
 	AutoDetectEnabled bool                   `bson:"auto_detect_enabled" json:"autoDetectEnabled"`
 	VeridropURL       string                 `bson:"veridrop_url" json:"veridropUrl"`
 	VeridropAPIToken  string                 `bson:"veridrop_api_token" json:"veridropApiToken"`
+	ReportBaseURL     string                 `bson:"report_base_url" json:"reportBaseUrl"`
 	NotificationType  string                 `bson:"notification_type" json:"notification_type"`
 	WebhookURL        string                 `bson:"webhook_url" json:"webhook_url"`
 	SignKey           string                 `bson:"sign_key" json:"sign_key"`
