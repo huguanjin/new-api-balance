@@ -187,6 +187,11 @@ func SaveSitesHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	if err := preserveModelDetectionForSites(ctx, sites); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to preserve model detection config"})
+		return
+	}
+
 	// Clear existing sites
 	_, err := SiteCol.DeleteMany(ctx, bson.M{})
 	if err != nil {
@@ -582,6 +587,9 @@ func applySiteSettings(site *models.Site, existing models.Site) {
 	}
 	if strings.TrimSpace(site.Adapter) == "" {
 		site.Adapter = existing.Adapter
+	}
+	if isEmptyModelDetectionConfig(site.ModelDetection) && !isEmptyModelDetectionConfig(existing.ModelDetection) {
+		site.ModelDetection = existing.ModelDetection
 	}
 }
 

@@ -18,6 +18,7 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	handlers.StartNotificationScheduler()
+	handlers.StartModelDetectionScheduler()
 
 	r := gin.Default()
 	r.GET("/healthz", func(c *gin.Context) {
@@ -35,6 +36,7 @@ func main() {
 		{
 			protected.GET("/sites", handlers.GetSitesHandler)
 			protected.POST("/sites", handlers.SaveSitesHandler)
+			protected.PUT("/sites/:id/model-detection", handlers.SaveSiteModelDetectionHandler)
 			protected.POST("/balance/query", handlers.QueryBalanceHandler)
 			protected.GET("/channels/import-config", handlers.GetChannelImportConfigHandler)
 			protected.PUT("/channels/import-config", handlers.SaveChannelImportConfigHandler)
@@ -43,6 +45,13 @@ func main() {
 			protected.PUT("/notification", handlers.SaveNotificationConfigHandler)
 			protected.POST("/notification/test", handlers.TestNotificationHandler)
 			protected.POST("/notification/send-now", handlers.SendBalanceNotificationNowHandler)
+			protected.GET("/model-detection/config", handlers.GetModelDetectionNotificationConfigHandler)
+			protected.PUT("/model-detection/config", handlers.SaveModelDetectionNotificationConfigHandler)
+			protected.POST("/model-detection/test-notification", handlers.TestModelDetectionNotificationHandler)
+			protected.POST("/model-detection/run", handlers.RunModelDetectionHandler)
+			protected.GET("/model-detection/jobs", handlers.GetModelDetectionJobsHandler)
+			protected.GET("/model-detection/jobs/:id/report", handlers.GetModelDetectionJobReportHandler)
+			protected.POST("/model-detection/jobs/:id/push", handlers.PushModelDetectionJobReportHandler)
 			protected.Any("/proxy", handlers.ProxyHandler)
 		}
 	}

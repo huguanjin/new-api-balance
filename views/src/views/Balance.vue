@@ -1,7 +1,7 @@
 <template>
   <div class="balance-container">
     <div class="header">
-      <h2>余额管理系统</h2>
+      <h2>渠道余额</h2>
       <div class="actions">
         <el-button type="primary" @click="refreshAll" :loading="refreshing">刷新所有余额</el-button>
         <el-button type="info" @click="openImportDialog">导入渠道</el-button>
@@ -9,7 +9,6 @@
         <el-button type="warning" @click="sendBalanceNotification" :loading="notifying">立即推送</el-button>
         <el-button @click="openNotificationDialog">通知设置</el-button>
         <el-button type="success" @click="openAddSite">添加站点</el-button>
-        <el-button type="danger" @click="logout">退出</el-button>
       </div>
     </div>
 
@@ -243,12 +242,10 @@
 
 <script setup>
 import { ref, onMounted, computed } from 'vue'
-import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import axios from 'axios'
 
-const router = useRouter()
 const sites = ref([])
 const loading = ref(false)
 const refreshing = ref(false)
@@ -792,7 +789,7 @@ const deleteSite = (site) => {
 
 const logout = () => {
   localStorage.removeItem('token')
-  router.push('/login')
+  window.location.href = '/login'
 }
 
 onMounted(() => {

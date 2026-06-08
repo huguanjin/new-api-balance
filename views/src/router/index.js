@@ -1,6 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Login from '../views/Login.vue'
 import Balance from '../views/Balance.vue'
+import MainLayout from '../views/MainLayout.vue'
+import ModelDetection from '../views/ModelDetection.vue'
 
 const routes = [
   {
@@ -13,10 +15,21 @@ const routes = [
     component: Login
   },
   {
-    path: '/balance',
-    name: 'Balance',
-    component: Balance,
-    meta: { requiresAuth: true }
+    path: '/',
+    component: MainLayout,
+    meta: { requiresAuth: true },
+    children: [
+      {
+        path: 'balance',
+        name: 'Balance',
+        component: Balance
+      },
+      {
+        path: 'model-detection',
+        name: 'ModelDetection',
+        component: ModelDetection
+      }
+    ]
   }
 ]
 
