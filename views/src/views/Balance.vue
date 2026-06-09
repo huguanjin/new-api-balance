@@ -217,6 +217,24 @@
           />
           <span class="form-suffix">USD，0 表示推送全部</span>
         </el-form-item>
+        <el-form-item label="红色预警值">
+          <el-input-number
+            v-model="notificationConfig.red_balance_threshold"
+            :min="0.01"
+            :precision="2"
+            :step="50"
+          />
+          <span class="form-suffix">USD 及以下标红</span>
+        </el-form-item>
+        <el-form-item label="黄色预警值">
+          <el-input-number
+            v-model="notificationConfig.yellow_balance_threshold"
+            :min="0.01"
+            :precision="2"
+            :step="50"
+          />
+          <span class="form-suffix">USD 及以下标黄，高于此值标绿</span>
+        </el-form-item>
         <el-form-item label="上次尝试">
           <span>{{ formatDateTime(notificationConfig.last_attempt_at) }}</span>
         </el-form-item>
@@ -255,6 +273,8 @@ const importing = ref(false)
 const importConfigLoading = ref(false)
 const savingImportConfig = ref(false)
 const statusFilter = ref('all')
+const defaultRedBalanceThreshold = 100
+const defaultYellowBalanceThreshold = 500
 
 const dialogVisible = ref(false)
 const isEdit = ref(false)
@@ -277,6 +297,8 @@ const defaultNotificationConfig = () => ({
   interval_minutes: 60,
   schedules: [],
   balance_threshold: 0,
+  red_balance_threshold: defaultRedBalanceThreshold,
+  yellow_balance_threshold: defaultYellowBalanceThreshold,
   last_attempt_at: '',
   last_sent_at: '',
   last_error: ''
@@ -285,6 +307,8 @@ const defaultNotificationConfig = () => ({
 const normalizeNotificationConfigData = (data = {}) => ({
   ...defaultNotificationConfig(),
   ...data,
+  red_balance_threshold: Number(data?.red_balance_threshold || defaultRedBalanceThreshold),
+  yellow_balance_threshold: Number(data?.yellow_balance_threshold || defaultYellowBalanceThreshold),
   schedules: (data?.schedules || []).map(schedule => ({
     start_time: schedule.start_time || '',
     end_time: schedule.end_time || '',
@@ -308,12 +332,15 @@ const notificationTypeLabel = computed(() => (
 
 const notificationStatusTitle = computed(() => {
   const threshold = Number(notificationConfig.value.balance_threshold || 0)
+  const redThreshold = Number(notificationConfig.value.red_balance_threshold || defaultRedBalanceThreshold)
+  const yellowThreshold = Number(notificationConfig.value.yellow_balance_threshold || defaultYellowBalanceThreshold)
   const thresholdText = threshold > 0 ? `，仅推送低于 ${threshold.toFixed(2)} USD 的渠道` : '，推送全部渠道'
+  const warningText = `，红色 <= ${redThreshold.toFixed(2)} USD，黄色 <= ${yellowThreshold.toFixed(2)} USD`
   const scheduleCount = notificationConfig.value.schedules?.length || 0
   const scheduleText = scheduleCount > 0
     ? `${scheduleCount} 个推送计划`
     : `每 ${notificationConfig.value.interval_minutes} 分钟`
-  return `余额通知已启用，${scheduleText}推送至 ${notificationTypeLabel.value}${thresholdText}`
+  return `余额通知已启用，${scheduleText}推送至 ${notificationTypeLabel.value}${thresholdText}${warningText}`
 })
 
 const filteredSites = computed(() => {
@@ -630,8 +657,29 @@ const notificationPayload = () => ({
   wework_webhook_url: notificationConfig.value.wework_webhook_url,
   interval_minutes: notificationConfig.value.interval_minutes,
   schedules: notificationSchedulesPayload(),
-  balance_threshold: Number(notificationConfig.value.balance_threshold || 0)
+  balance_threshold: Number(notificationConfig.value.balance_threshold || 0),
+  red_balance_threshold: Number(notificationConfig.value.red_balance_threshold || defaultRedBalanceThreshold),
+  yellow_balance_threshold: Number(notificationConfig.value.yellow_balance_threshold || defaultYellowBalanceThreshold)
 })
+
+const validateNotificationThresholds = () => {
+  const redThreshold = Number(notificationConfig.value.red_balance_threshold)
+  const yellowThreshold = Number(notificationConfig.value.yellow_balance_threshold)
+
+  if (!Number.isFinite(redThreshold) || redThreshold <= 0) {
+    ElMessage.error('红色预警值必须大于 0')
+    return false
+  }
+  if (!Number.isFinite(yellowThreshold) || yellowThreshold <= 0) {
+    ElMessage.error('黄色预警值必须大于 0')
+    return false
+  }
+  if (redThreshold > yellowThreshold) {
+    ElMessage.error('红色预警值不能大于黄色预警值')
+    return false
+  }
+  return true
+}
 
 const notificationSchedulesPayload = () => (
   (notificationConfig.value.schedules || []).map(schedule => ({
@@ -645,6 +693,8 @@ const saveNotificationConfig = async (silent = false) => {
   if (typeof silent !== 'boolean') {
     silent = false
   }
+  if (!validateNotificationThresholds()) return false
+
   savingNotification.value = true
   try {
     const res = await axios.put('/api/notification', notificationPayload(), {

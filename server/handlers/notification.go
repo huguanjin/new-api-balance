@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +30,9 @@ import (
 const (
 	notificationConfigID              = "balance_notification"
 	defaultNotificationIntervalMinute = 60
+	defaultRedBalanceThreshold        = 100
+	defaultYellowBalanceThreshold     = 500
+	defaultNotificationTimezone       = "Asia/Shanghai"
 	maxNotificationIntervalMinute     = 10080
 	maxNotificationSchedules          = 24
 	maxNotificationScheduleInterval   = 1440
@@ -41,6 +45,8 @@ const (
 var (
 	notificationHTTPClient   = &http.Client{Timeout: 15 * time.Second}
 	notificationRunMu        sync.Mutex
+	notificationLocationOnce sync.Once
+	notificationLocation     *time.Location
 	errNoNotificationTargets = errors.New("没有符合推送条件的渠道，本次未发送")
 )
 
@@ -57,25 +63,29 @@ type balanceResult struct {
 }
 
 type balanceNotificationSummary struct {
-	TotalSites     int             `json:"total_sites"`
-	SuccessCount   int             `json:"success_count"`
-	FailedCount    int             `json:"failed_count"`
-	TotalBalance   float64         `json:"total_balance"`
-	MatchedCount   int             `json:"matched_count"`
-	MatchedBalance float64         `json:"matched_balance"`
-	Threshold      float64         `json:"threshold"`
-	Results        []balanceResult `json:"results"`
+	TotalSites      int             `json:"total_sites"`
+	SuccessCount    int             `json:"success_count"`
+	FailedCount     int             `json:"failed_count"`
+	TotalBalance    float64         `json:"total_balance"`
+	MatchedCount    int             `json:"matched_count"`
+	MatchedBalance  float64         `json:"matched_balance"`
+	Threshold       float64         `json:"threshold"`
+	RedThreshold    float64         `json:"red_balance_threshold"`
+	YellowThreshold float64         `json:"yellow_balance_threshold"`
+	Results         []balanceResult `json:"results"`
 }
 
 type notificationConfigRequest struct {
-	Enabled          bool                          `json:"enabled"`
-	NotificationType string                        `json:"notification_type"`
-	WebhookURL       string                        `json:"webhook_url"`
-	SignKey          string                        `json:"sign_key"`
-	WeworkWebhookURL string                        `json:"wework_webhook_url"`
-	IntervalMinutes  int                           `json:"interval_minutes"`
-	Schedules        []models.NotificationSchedule `json:"schedules"`
-	BalanceThreshold float64                       `json:"balance_threshold"`
+	Enabled                bool                          `json:"enabled"`
+	NotificationType       string                        `json:"notification_type"`
+	WebhookURL             string                        `json:"webhook_url"`
+	SignKey                string                        `json:"sign_key"`
+	WeworkWebhookURL       string                        `json:"wework_webhook_url"`
+	IntervalMinutes        int                           `json:"interval_minutes"`
+	Schedules              []models.NotificationSchedule `json:"schedules"`
+	BalanceThreshold       float64                       `json:"balance_threshold"`
+	RedBalanceThreshold    float64                       `json:"red_balance_threshold"`
+	YellowBalanceThreshold float64                       `json:"yellow_balance_threshold"`
 }
 
 func GetNotificationConfigHandler(c *gin.Context) {
@@ -99,14 +109,16 @@ func SaveNotificationConfigHandler(c *gin.Context) {
 	}
 
 	config := models.NotificationConfig{
-		Enabled:          req.Enabled,
-		NotificationType: req.NotificationType,
-		WebhookURL:       req.WebhookURL,
-		SignKey:          req.SignKey,
-		WeworkWebhookURL: req.WeworkWebhookURL,
-		IntervalMinutes:  req.IntervalMinutes,
-		Schedules:        req.Schedules,
-		BalanceThreshold: req.BalanceThreshold,
+		Enabled:                req.Enabled,
+		NotificationType:       req.NotificationType,
+		WebhookURL:             req.WebhookURL,
+		SignKey:                req.SignKey,
+		WeworkWebhookURL:       req.WeworkWebhookURL,
+		IntervalMinutes:        req.IntervalMinutes,
+		Schedules:              req.Schedules,
+		BalanceThreshold:       req.BalanceThreshold,
+		RedBalanceThreshold:    req.RedBalanceThreshold,
+		YellowBalanceThreshold: req.YellowBalanceThreshold,
 	}
 	normalizeNotificationConfig(&config)
 	if err := validateNotificationConfig(config, config.Enabled); err != nil {
@@ -125,18 +137,20 @@ func SaveNotificationConfigHandler(c *gin.Context) {
 
 	now := time.Now()
 	update := bson.M{
-		"enabled":            config.Enabled,
-		"notification_type":  config.NotificationType,
-		"webhook_url":        config.WebhookURL,
-		"sign_key":           config.SignKey,
-		"wework_webhook_url": config.WeworkWebhookURL,
-		"interval_minutes":   config.IntervalMinutes,
-		"schedules":          config.Schedules,
-		"balance_threshold":  config.BalanceThreshold,
-		"last_attempt_at":    existing.LastAttemptAt,
-		"last_sent_at":       existing.LastSentAt,
-		"last_error":         existing.LastError,
-		"updated_at":         now,
+		"enabled":                  config.Enabled,
+		"notification_type":        config.NotificationType,
+		"webhook_url":              config.WebhookURL,
+		"sign_key":                 config.SignKey,
+		"wework_webhook_url":       config.WeworkWebhookURL,
+		"interval_minutes":         config.IntervalMinutes,
+		"schedules":                config.Schedules,
+		"balance_threshold":        config.BalanceThreshold,
+		"red_balance_threshold":    config.RedBalanceThreshold,
+		"yellow_balance_threshold": config.YellowBalanceThreshold,
+		"last_attempt_at":          existing.LastAttemptAt,
+		"last_sent_at":             existing.LastSentAt,
+		"last_error":               existing.LastError,
+		"updated_at":               now,
 	}
 
 	opts := options.Update().SetUpsert(true)
@@ -238,7 +252,7 @@ func runScheduledBalanceNotification() {
 	if !found || !config.Enabled {
 		return
 	}
-	if !notificationDue(config, time.Now()) {
+	if !notificationDue(config, notificationNow()) {
 		return
 	}
 	if err := validateNotificationConfig(config, true); err != nil {
@@ -322,7 +336,7 @@ func sendBalanceNotification(ctx context.Context, config models.NotificationConf
 		return balanceNotificationSummary{}, err
 	}
 
-	summary := summarizeBalanceResults(results, config.BalanceThreshold)
+	summary := summarizeBalanceResults(results, config.BalanceThreshold, config.RedBalanceThreshold, config.YellowBalanceThreshold)
 	if len(summary.Results) == 0 {
 		return summary, errNoNotificationTargets
 	}
@@ -540,10 +554,13 @@ func numberFromMap(data map[string]interface{}, key string) (float64, bool) {
 	}
 }
 
-func summarizeBalanceResults(results []balanceResult, threshold float64) balanceNotificationSummary {
+func summarizeBalanceResults(results []balanceResult, threshold, redThreshold, yellowThreshold float64) balanceNotificationSummary {
+	redThreshold, yellowThreshold = defaultedBalanceWarningThresholds(redThreshold, yellowThreshold)
 	summary := balanceNotificationSummary{
-		TotalSites: len(results),
-		Threshold:  threshold,
+		TotalSites:      len(results),
+		Threshold:       threshold,
+		RedThreshold:    redThreshold,
+		YellowThreshold: yellowThreshold,
 	}
 	for _, result := range results {
 		if result.OK {
@@ -565,7 +582,7 @@ func summarizeBalanceResults(results []balanceResult, threshold float64) balance
 func buildBalanceNotificationMessage(summary balanceNotificationSummary) string {
 	var builder strings.Builder
 	builder.WriteString("New API 渠道余额通知\n\n")
-	builder.WriteString(fmt.Sprintf("查询时间: %s\n", time.Now().Format("2006-01-02 15:04:05")))
+	builder.WriteString(fmt.Sprintf("查询时间: %s\n", formatNotificationTime(notificationNow())))
 	builder.WriteString(fmt.Sprintf("站点总数: %d\n", summary.TotalSites))
 	builder.WriteString(fmt.Sprintf("查询成功: %d\n", summary.SuccessCount))
 	builder.WriteString(fmt.Sprintf("查询失败: %d\n", summary.FailedCount))
@@ -600,7 +617,7 @@ func sendBalanceSummaryNotification(ctx context.Context, config models.Notificat
 }
 
 func sendTestNotification(ctx context.Context, config models.NotificationConfig) error {
-	now := time.Now().Format("2006-01-02 15:04:05")
+	now := formatNotificationTime(notificationNow())
 	if config.NotificationType == "wework" {
 		message := fmt.Sprintf("#### New API Balance 通知测试\n> 发送时间：%s\n> 状态：<font color=\"info\">Webhook 配置正常</font>", now)
 		return sendWeworkMarkdownNotification(ctx, config.WeworkWebhookURL, message)
@@ -647,16 +664,20 @@ func buildFeishuBalanceCard(summary balanceNotificationSummary) map[string]inter
 	}
 
 	fields := []interface{}{
-		feishuField("查询时间", time.Now().Format("2006-01-02 15:04:05")),
+		feishuField("查询时间", formatNotificationTime(notificationNow())),
 		feishuField("站点总数", strconv.Itoa(summary.TotalSites)),
 		feishuField("查询成功", strconv.Itoa(summary.SuccessCount)),
 		feishuField("查询失败", strconv.Itoa(summary.FailedCount)),
 		feishuField("推送条数", strconv.Itoa(summary.MatchedCount)),
-		feishuField("推送余额合计", fmt.Sprintf("<font color=\"%s\">%s</font>", balanceColor(summary.MatchedBalance), formatUSD(summary.MatchedBalance))),
+		feishuField("推送余额合计", fmt.Sprintf("<font color=\"%s\">%s</font>", balanceColor(summary.MatchedBalance, summary.RedThreshold, summary.YellowThreshold), formatUSD(summary.MatchedBalance))),
 	}
 	if summary.Threshold > 0 {
 		fields = append(fields, feishuField("低余额阈值", fmt.Sprintf("%s 以下", formatUSD(summary.Threshold))))
 	}
+	fields = append(fields,
+		feishuField("红色预警值", fmt.Sprintf("%s 及以下", formatUSD(summary.RedThreshold))),
+		feishuField("黄色预警值", fmt.Sprintf("%s 及以下", formatUSD(summary.YellowThreshold))),
+	)
 
 	elements := []interface{}{
 		map[string]interface{}{
@@ -679,7 +700,7 @@ func buildFeishuBalanceCard(summary balanceNotificationSummary) map[string]inter
 		for index, result := range summary.Results {
 			elements = append(elements, map[string]interface{}{
 				"tag":  "div",
-				"text": feishuMarkdown(buildFeishuResultLine(index+1, result)),
+				"text": feishuMarkdown(buildFeishuResultLine(index+1, result, summary.RedThreshold, summary.YellowThreshold)),
 			})
 		}
 	}
@@ -713,7 +734,7 @@ func feishuMarkdown(content string) map[string]string {
 	}
 }
 
-func buildFeishuResultLine(index int, result balanceResult) string {
+func buildFeishuResultLine(index int, result balanceResult, redThreshold, yellowThreshold float64) string {
 	name := result.Name
 	if name == "" {
 		name = result.URL
@@ -735,7 +756,7 @@ func buildFeishuResultLine(index int, result balanceResult) string {
 		formatChannelID(result.ChannelID),
 		name,
 		result.URL,
-		balanceColor(result.Balance),
+		balanceColor(result.Balance, redThreshold, yellowThreshold),
 		formatUSD(result.Balance),
 	)
 }
@@ -743,15 +764,17 @@ func buildFeishuResultLine(index int, result balanceResult) string {
 func buildWeworkBalanceMarkdownMessage(summary balanceNotificationSummary) string {
 	var builder strings.Builder
 	builder.WriteString(fmt.Sprintf("#### %s\n", balanceNotificationTitle(summary)))
-	builder.WriteString(fmt.Sprintf("> 查询时间：%s\n", time.Now().Format("2006-01-02 15:04:05")))
+	builder.WriteString(fmt.Sprintf("> 查询时间：%s\n", formatNotificationTime(notificationNow())))
 	builder.WriteString(fmt.Sprintf("> 站点总数：<font color=\"comment\">%d</font>\n", summary.TotalSites))
 	builder.WriteString(fmt.Sprintf("> 查询成功：<font color=\"info\">%d</font>\n", summary.SuccessCount))
 	builder.WriteString(fmt.Sprintf("> 查询失败：<font color=\"warning\">%d</font>\n", summary.FailedCount))
 	builder.WriteString(fmt.Sprintf("> 推送条数：<font color=\"comment\">%d</font>\n", summary.MatchedCount))
-	builder.WriteString(fmt.Sprintf("> 推送余额合计：<font color=\"%s\">%s</font>\n", weworkBalanceColor(summary.MatchedBalance), formatUSD(summary.MatchedBalance)))
+	builder.WriteString(fmt.Sprintf("> 推送余额合计：<font color=\"%s\">%s</font>\n", weworkBalanceColor(summary.MatchedBalance, summary.RedThreshold, summary.YellowThreshold), formatUSD(summary.MatchedBalance)))
 	if summary.Threshold > 0 {
 		builder.WriteString(fmt.Sprintf("> 低余额阈值：<font color=\"warning\">%s 以下</font>\n", formatUSD(summary.Threshold)))
 	}
+	builder.WriteString(fmt.Sprintf("> 红色预警值：<font color=\"warning\">%s 及以下</font>\n", formatUSD(summary.RedThreshold)))
+	builder.WriteString(fmt.Sprintf("> 黄色预警值：<font color=\"warning\">%s 及以下</font>\n", formatUSD(summary.YellowThreshold)))
 	builder.WriteString("\n")
 
 	if len(summary.Results) == 0 {
@@ -777,7 +800,7 @@ func buildWeworkBalanceMarkdownMessage(summary balanceNotificationSummary) strin
 		builder.WriteString(fmt.Sprintf("   url：%s\n", result.URL))
 		builder.WriteString(fmt.Sprintf(
 			"   余额：<font color=\"%s\">%s</font>\n",
-			weworkBalanceColor(result.Balance),
+			weworkBalanceColor(result.Balance, summary.RedThreshold, summary.YellowThreshold),
 			formatUSD(result.Balance),
 		))
 	}
@@ -940,10 +963,12 @@ func loadNotificationConfig(ctx context.Context) (models.NotificationConfig, boo
 
 func defaultNotificationConfig() models.NotificationConfig {
 	return models.NotificationConfig{
-		ID:               notificationConfigID,
-		NotificationType: "feishu",
-		IntervalMinutes:  defaultNotificationIntervalMinute,
-		BalanceThreshold: 0,
+		ID:                     notificationConfigID,
+		NotificationType:       "feishu",
+		IntervalMinutes:        defaultNotificationIntervalMinute,
+		BalanceThreshold:       0,
+		RedBalanceThreshold:    defaultRedBalanceThreshold,
+		YellowBalanceThreshold: defaultYellowBalanceThreshold,
 	}
 }
 
@@ -967,6 +992,10 @@ func normalizeNotificationConfig(config *models.NotificationConfig) {
 	if config.BalanceThreshold < 0 {
 		config.BalanceThreshold = 0
 	}
+	config.RedBalanceThreshold, config.YellowBalanceThreshold = defaultedBalanceWarningThresholds(
+		config.RedBalanceThreshold,
+		config.YellowBalanceThreshold,
+	)
 }
 
 func normalizeNotificationSchedules(schedules []models.NotificationSchedule) []models.NotificationSchedule {
@@ -1004,6 +1033,9 @@ func normalizeNotificationSchedules(schedules []models.NotificationSchedule) []m
 func validateNotificationConfig(config models.NotificationConfig, requireWebhook bool) error {
 	if err := validateNotificationSchedules(config.Schedules); err != nil {
 		return err
+	}
+	if config.RedBalanceThreshold > config.YellowBalanceThreshold {
+		return errors.New("红色预警值不能大于黄色预警值")
 	}
 	if !requireWebhook {
 		return nil
@@ -1149,6 +1181,40 @@ func balanceToQuota(balance float64) float64 {
 	return balance * 500000
 }
 
+func notificationNow() time.Time {
+	return time.Now().In(notificationTimeLocation())
+}
+
+func formatNotificationTime(value time.Time) string {
+	return formatNotificationTimeInLocation(value, notificationTimeLocation())
+}
+
+func notificationTimeLocation() *time.Location {
+	notificationLocationOnce.Do(func() {
+		notificationLocation = loadNotificationTimeLocation(os.Getenv("TZ"))
+	})
+	return notificationLocation
+}
+
+func loadNotificationTimeLocation(timezone string) *time.Location {
+	timezone = strings.TrimSpace(timezone)
+	if timezone == "" {
+		timezone = defaultNotificationTimezone
+	}
+	location, err := time.LoadLocation(timezone)
+	if err != nil {
+		location, err = time.LoadLocation(defaultNotificationTimezone)
+	}
+	if err != nil {
+		return time.FixedZone("CST", 8*60*60)
+	}
+	return location
+}
+
+func formatNotificationTimeInLocation(value time.Time, location *time.Location) string {
+	return value.In(location).Format("2006-01-02 15:04:05")
+}
+
 func balanceNotificationTitle(summary balanceNotificationSummary) string {
 	if summary.Threshold > 0 {
 		return "New API 低余额渠道通知"
@@ -1156,24 +1222,36 @@ func balanceNotificationTitle(summary balanceNotificationSummary) string {
 	return "New API 渠道余额通知"
 }
 
-func balanceColor(balance float64) string {
-	if balance < 0 {
+func balanceColor(balance, redThreshold, yellowThreshold float64) string {
+	redThreshold, yellowThreshold = defaultedBalanceWarningThresholds(redThreshold, yellowThreshold)
+	if balance <= redThreshold {
 		return "red"
 	}
-	if balance < 10 {
-		return "orange"
+	if balance <= yellowThreshold {
+		return "yellow"
 	}
 	return "green"
 }
 
-func weworkBalanceColor(balance float64) string {
-	if balance < 0 {
+func weworkBalanceColor(balance, redThreshold, yellowThreshold float64) string {
+	redThreshold, yellowThreshold = defaultedBalanceWarningThresholds(redThreshold, yellowThreshold)
+	if balance <= redThreshold {
 		return "warning"
 	}
-	if balance < 10 {
+	if balance <= yellowThreshold {
 		return "warning"
 	}
 	return "info"
+}
+
+func defaultedBalanceWarningThresholds(redThreshold, yellowThreshold float64) (float64, float64) {
+	if redThreshold <= 0 {
+		redThreshold = defaultRedBalanceThreshold
+	}
+	if yellowThreshold <= 0 {
+		yellowThreshold = defaultYellowBalanceThreshold
+	}
+	return redThreshold, yellowThreshold
 }
 
 func formatUSD(value float64) string {

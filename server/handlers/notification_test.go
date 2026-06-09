@@ -117,3 +117,77 @@ func TestGrisaNotificationEligibilityDoesNotRequireUserID(t *testing.T) {
 		t.Fatal("expected grisa site with token to be eligible without user id")
 	}
 }
+
+func TestBalanceColorThresholds(t *testing.T) {
+	cases := []struct {
+		name    string
+		balance float64
+		want    string
+	}{
+		{name: "below red threshold", balance: 99.99, want: "red"},
+		{name: "at red threshold", balance: 100, want: "red"},
+		{name: "above red threshold", balance: 100.01, want: "yellow"},
+		{name: "at yellow threshold", balance: 500, want: "yellow"},
+		{name: "above yellow threshold", balance: 500.01, want: "green"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := balanceColor(tc.balance, defaultRedBalanceThreshold, defaultYellowBalanceThreshold); got != tc.want {
+				t.Fatalf("balanceColor(%v) = %s, want %s", tc.balance, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBalanceColorUsesConfiguredThresholds(t *testing.T) {
+	redThreshold := 50.0
+	yellowThreshold := 200.0
+
+	cases := []struct {
+		balance float64
+		want    string
+	}{
+		{balance: 50, want: "red"},
+		{balance: 50.01, want: "yellow"},
+		{balance: 200, want: "yellow"},
+		{balance: 200.01, want: "green"},
+	}
+
+	for _, tc := range cases {
+		if got := balanceColor(tc.balance, redThreshold, yellowThreshold); got != tc.want {
+			t.Fatalf("balanceColor(%v) = %s, want %s", tc.balance, got, tc.want)
+		}
+	}
+}
+
+func TestNormalizeNotificationConfigDefaultsBalanceWarningThresholds(t *testing.T) {
+	config := models.NotificationConfig{}
+	normalizeNotificationConfig(&config)
+
+	if config.RedBalanceThreshold != defaultRedBalanceThreshold {
+		t.Fatalf("red threshold = %v, want %v", config.RedBalanceThreshold, defaultRedBalanceThreshold)
+	}
+	if config.YellowBalanceThreshold != defaultYellowBalanceThreshold {
+		t.Fatalf("yellow threshold = %v, want %v", config.YellowBalanceThreshold, defaultYellowBalanceThreshold)
+	}
+}
+
+func TestValidateNotificationConfigRejectsRedThresholdAboveYellowThreshold(t *testing.T) {
+	config := defaultNotificationConfig()
+	config.RedBalanceThreshold = 501
+	config.YellowBalanceThreshold = 500
+
+	if err := validateNotificationConfig(config, false); err == nil {
+		t.Fatal("expected red threshold above yellow threshold to be rejected")
+	}
+}
+
+func TestFormatNotificationTimeDefaultsToShanghai(t *testing.T) {
+	utcTime := time.Date(2026, 6, 9, 2, 33, 32, 0, time.UTC)
+	location := loadNotificationTimeLocation("")
+
+	if got := formatNotificationTimeInLocation(utcTime, location); got != "2026-06-09 10:33:32" {
+		t.Fatalf("formatted notification time = %s, want 2026-06-09 10:33:32", got)
+	}
+}
