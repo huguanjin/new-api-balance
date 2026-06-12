@@ -352,23 +352,38 @@
           <div class="form-tip">不配置推送计划时仅支持手动执行；配置后系统将按计划自动检测并推送</div>
         </el-form-item>
         <el-form-item label="生效渠道 ID">
-          <el-select
-            v-model="notifyForm.channelIds"
-            multiple
-            filterable
-            allow-create
-            default-first-option
-            placeholder="选择或输入渠道 ID"
-            style="width: 100%"
-            :reserve-keyword="false"
-          >
-            <el-option
-              v-for="ch in channels"
-              :key="ch.channelId"
-              :label="`${ch.channelId} - ${ch.name}`"
-              :value="ch.channelId"
+          <div class="notify-channel-picker">
+            <el-input
+              v-model="notifyChannelSearch"
+              placeholder="搜索渠道 ID / 名称 / 分组 / 标签"
+              clearable
+              :prefix-icon="Search"
+              style="margin-bottom: 8px"
             />
-          </el-select>
+            <div class="notify-channel-actions">
+              <el-button type="primary" link size="small" @click="selectAllFilteredNotifyChannels">
+                全选筛选结果 ({{ filteredNotifyChannels.length }})
+              </el-button>
+              <el-button type="primary" link size="small" @click="selectAllNotifyChannels">
+                全选所有 ({{ channels.length }})
+              </el-button>
+              <el-button type="danger" link size="small" @click="notifyForm.channelIds = []" :disabled="!notifyForm.channelIds.length">
+                清空
+              </el-button>
+              <span class="notify-channel-count">已选 {{ notifyForm.channelIds.length }} 个</span>
+            </div>
+            <div class="notify-channel-list">
+              <el-checkbox-group v-model="notifyForm.channelIds">
+                <el-checkbox
+                  v-for="ch in filteredNotifyChannels"
+                  :key="ch.channelId"
+                  :value="ch.channelId"
+                  :label="`${ch.channelId} - ${ch.name}`"
+                />
+              </el-checkbox-group>
+              <div v-if="filteredNotifyChannels.length === 0" class="notify-channel-empty">无匹配渠道</div>
+            </div>
+          </div>
           <div class="form-tip">
             至少配置一个渠道 ID，未在此列表中的渠道不会触发推送
           </div>
@@ -455,6 +470,7 @@ const notifyForm = ref({
   schedules: []
 })
 const notifyMissingIds = ref([])
+const notifyChannelSearch = ref('')
 
 const customModelDialogVisible = ref(false)
 const customModelChannelId = ref(0)
@@ -869,6 +885,29 @@ const openNotifyConfigDialog = async () => {
   }
 }
 
+const filteredNotifyChannels = computed(() => {
+  const keyword = notifyChannelSearch.value.trim().toLowerCase()
+  if (!keyword) return channels.value
+  return channels.value.filter(ch =>
+    String(ch.channelId).includes(keyword) ||
+    (ch.name || '').toLowerCase().includes(keyword) ||
+    (ch.group || '').toLowerCase().includes(keyword) ||
+    (ch.tag || '').toLowerCase().includes(keyword)
+  )
+})
+
+const selectAllFilteredNotifyChannels = () => {
+  const current = new Set(notifyForm.value.channelIds)
+  for (const ch of filteredNotifyChannels.value) {
+    current.add(ch.channelId)
+  }
+  notifyForm.value.channelIds = [...current]
+}
+
+const selectAllNotifyChannels = () => {
+  notifyForm.value.channelIds = channels.value.map(ch => ch.channelId)
+}
+
 const checkNotifyMissingIds = () => {
   const existingIds = new Set(channels.value.map(ch => ch.channelId))
   notifyMissingIds.value = (notifyForm.value.channelIds || []).filter(id => !existingIds.has(id))
@@ -1135,6 +1174,49 @@ onMounted(() => {
 
 .notify-missing-tags {
   margin-top: 8px;
+}
+
+.notify-channel-picker {
+  width: 100%;
+}
+
+.notify-channel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.notify-channel-count {
+  color: #909399;
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.notify-channel-list {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  padding: 8px 12px;
+}
+
+.notify-channel-list .el-checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.notify-channel-list .el-checkbox {
+  margin-right: 0;
+}
+
+.notify-channel-empty {
+  color: #909399;
+  font-size: 13px;
+  text-align: center;
+  padding: 16px 0;
 }
 
 .schedules-wrapper {
