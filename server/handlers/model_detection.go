@@ -91,6 +91,11 @@ type veridropStatusResponse struct {
 	Error       string   `json:"error"`
 }
 
+type modelDetectionNotificationLink struct {
+	Label string
+	URL   string
+}
+
 func SaveSiteModelDetectionHandler(c *gin.Context) {
 	siteID, err := primitive.ObjectIDFromHex(strings.TrimSpace(c.Param("id")))
 	if err != nil {
@@ -820,7 +825,7 @@ func sendModelDetectionJobNotification(ctx context.Context, config models.ModelD
 }
 
 func sendModelDetectionTestNotification(ctx context.Context, config models.ModelDetectionNotificationConfig) error {
-	now := time.Now().Format("2006-01-02 15:04:05")
+	now := formatNotificationTime(notificationNow())
 	if config.NotificationType == "wework" {
 		message := fmt.Sprintf("#### New API 模型检测通知测试\n> 发送时间：%s\n> 状态：<font color=\"info\">Webhook 配置正常</font>", now)
 		return sendWeworkMarkdownNotification(ctx, config.WeworkWebhookURL, message)
@@ -876,20 +881,22 @@ func buildFeishuModelDetectionCard(config models.ModelDetectionNotificationConfi
 			"text": feishuMarkdown(modelDetectionSummaryText(job)),
 		},
 	}
-	if link := modelDetectionReportLink(config, job); link != "" {
-		elements = append(elements, map[string]interface{}{
-			"tag": "action",
-			"actions": []interface{}{
-				map[string]interface{}{
-					"tag": "button",
-					"text": map[string]string{
-						"tag":     "plain_text",
-						"content": "查看报告",
-					},
-					"url":  link,
-					"type": "primary",
+	if links := modelDetectionReportLinks(config, job); len(links) > 0 {
+		actions := make([]interface{}, 0, len(links))
+		for _, link := range links {
+			actions = append(actions, map[string]interface{}{
+				"tag": "button",
+				"text": map[string]string{
+					"tag":     "plain_text",
+					"content": link.Label,
 				},
-			},
+				"url":  link.URL,
+				"type": "primary",
+			})
+		}
+		elements = append(elements, map[string]interface{}{
+			"tag":     "action",
+			"actions": actions,
 		})
 	}
 
@@ -924,8 +931,10 @@ func buildWeworkModelDetectionMessage(config models.ModelDetectionNotificationCo
 	builder.WriteString(fmt.Sprintf("> 等级：%s\n", valueOrDash(job.TierTitle)))
 	builder.WriteString("\n")
 	builder.WriteString(modelDetectionSummaryText(job))
-	if link := modelDetectionReportLink(config, job); link != "" {
-		builder.WriteString(fmt.Sprintf("\n\n[查看报告](%s)", link))
+	if links := modelDetectionReportLinks(config, job); len(links) > 0 {
+		for _, link := range links {
+			builder.WriteString(fmt.Sprintf("\n\n[%s](%s)", link.Label, link.URL))
+		}
 	}
 	return builder.String()
 }
@@ -1403,14 +1412,39 @@ func modelDetectionSummaryText(job models.ModelDetectionJob) string {
 	return "报告已生成。"
 }
 
+func modelDetectionReportLinks(config models.ModelDetectionNotificationConfig, job models.ModelDetectionJob) []modelDetectionNotificationLink {
+	links := make([]modelDetectionNotificationLink, 0, 2)
+	seen := make(map[string]struct{}, 2)
+
+	addLink := func(label, rawURL string) {
+		rawURL = strings.TrimSpace(rawURL)
+		if label == "" || rawURL == "" {
+			return
+		}
+		if !isAbsoluteHTTPURL(rawURL) {
+			return
+		}
+		if _, ok := seen[rawURL]; ok {
+			return
+		}
+		seen[rawURL] = struct{}{}
+		links = append(links, modelDetectionNotificationLink{Label: label, URL: rawURL})
+	}
+
+	addLink("查看报告", modelDetectionReportLink(config, job))
+	addLink("查看原始报告", job.ResultURL)
+
+	return links
+}
+
 func modelDetectionReportLink(config models.ModelDetectionNotificationConfig, job models.ModelDetectionJob) string {
 	baseURL := strings.TrimRight(strings.TrimSpace(config.ReportBaseURL), "/")
 	if baseURL == "" || job.ID.IsZero() {
 		return ""
 	}
 
-	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+	parsed, err := parseAbsoluteHTTPURL(baseURL)
+	if err != nil {
 		return ""
 	}
 
@@ -1419,6 +1453,22 @@ func modelDetectionReportLink(config models.ModelDetectionNotificationConfig, jo
 	query.Set("jobId", job.ID.Hex())
 	parsed.RawQuery = query.Encode()
 	return parsed.String()
+}
+
+func isAbsoluteHTTPURL(rawURL string) bool {
+	_, err := parseAbsoluteHTTPURL(rawURL)
+	return err == nil
+}
+
+func parseAbsoluteHTTPURL(rawURL string) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return nil, errors.New("invalid absolute url")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, errors.New("url must use http or https")
+	}
+	return parsed, nil
 }
 
 func formatModelDetectionSite(job models.ModelDetectionJob) string {
@@ -1443,7 +1493,7 @@ func formatOptionalTime(value *time.Time) string {
 	if value == nil {
 		return "-"
 	}
-	return value.Format("2006-01-02 15:04:05")
+	return formatNotificationTime(*value)
 }
 
 func displaySiteName(site models.Site) string {

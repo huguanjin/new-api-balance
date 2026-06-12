@@ -23,8 +23,11 @@ var (
 	SiteCol                 *mongo.Collection
 	NotificationConfigCol   *mongo.Collection
 	ChannelImportConfigCol  *mongo.Collection
-	ModelDetectionConfigCol *mongo.Collection
-	ModelDetectionJobCol    *mongo.Collection
+	ModelDetectionConfigCol      *mongo.Collection
+	ModelDetectionJobCol         *mongo.Collection
+	ChannelAvailabilityConfigCol  *mongo.Collection
+	ChannelAvailabilityNotifyCol *mongo.Collection
+	UpstreamChannelCol           *mongo.Collection
 )
 
 type mongoConfigFile struct {
@@ -63,6 +66,9 @@ func InitDB() error {
 	ChannelImportConfigCol = db.Collection("channel_import_configs")
 	ModelDetectionConfigCol = db.Collection("model_detection_configs")
 	ModelDetectionJobCol = db.Collection("model_detection_jobs")
+	ChannelAvailabilityConfigCol = db.Collection("channel_availability_configs")
+	ChannelAvailabilityNotifyCol = db.Collection("channel_availability_notify_configs")
+	UpstreamChannelCol = db.Collection("upstream_channels")
 
 	// Ensure admin exists
 	err = ensureAdminExists()

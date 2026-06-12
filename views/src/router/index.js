@@ -3,6 +3,7 @@ import Login from '../views/Login.vue'
 import Balance from '../views/Balance.vue'
 import MainLayout from '../views/MainLayout.vue'
 import ModelDetection from '../views/ModelDetection.vue'
+import ChannelAvailability from '../views/ChannelAvailability.vue'
 
 const routes = [
   {
@@ -28,6 +29,11 @@ const routes = [
         path: 'model-detection',
         name: 'ModelDetection',
         component: ModelDetection
+      },
+      {
+        path: 'channel-availability',
+        name: 'ChannelAvailability',
+        component: ChannelAvailability
       }
     ]
   }

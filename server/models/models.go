@@ -95,6 +95,57 @@ type ModelDetectionNotificationConfig struct {
 	UpdatedAt         time.Time              `bson:"updated_at" json:"updated_at"`
 }
 
+type ChannelAvailabilityNotifyConfig struct {
+	ID               string                 `bson:"_id,omitempty" json:"-"`
+	Enabled          bool                   `bson:"enabled" json:"enabled"`
+	NotificationType string                 `bson:"notification_type" json:"notificationType"`
+	WebhookURL       string                 `bson:"webhook_url" json:"webhookUrl"`
+	SignKey          string                 `bson:"sign_key" json:"signKey"`
+	WeworkWebhookURL string                 `bson:"wework_webhook_url" json:"weworkWebhookUrl"`
+	ChannelIDs       []int                  `bson:"channel_ids" json:"channelIds"`
+	StatusFilter     int                    `bson:"status_filter" json:"statusFilter"`
+	RefreshChannels  *bool                  `bson:"refresh_channels" json:"refreshChannels"`
+	AutoToggle       bool                   `bson:"auto_toggle" json:"autoToggle"`
+	Schedules        []NotificationSchedule `bson:"schedules" json:"schedules"`
+	LastAttemptAt    *time.Time             `bson:"last_attempt_at,omitempty" json:"lastAttemptAt,omitempty"`
+	UpdatedAt        time.Time              `bson:"updated_at" json:"updatedAt"`
+}
+
+type ChannelAvailabilityConfig struct {
+	ID        string    `bson:"_id,omitempty" json:"-"`
+	URL       string    `bson:"url" json:"url"`
+	Token     string    `bson:"token" json:"token"`
+	UserID    string    `bson:"userId" json:"userId"`
+	UpdatedAt time.Time `bson:"updated_at" json:"updated_at"`
+}
+
+type UpstreamChannel struct {
+	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	ChannelID      int                `bson:"channelId" json:"channelId"`
+	Type           int                `bson:"type" json:"type"`
+	Status         int                `bson:"status" json:"status"`
+	Name           string             `bson:"name" json:"name"`
+	Weight         int                `bson:"weight" json:"weight"`
+	CreatedTime    int64              `bson:"created_time" json:"createdTime"`
+	TestTime       int64              `bson:"test_time" json:"testTime"`
+	ResponseTime   int                `bson:"response_time" json:"responseTime"`
+	BaseURL        string             `bson:"base_url" json:"baseUrl"`
+	Balance        float64            `bson:"balance" json:"balance"`
+	Models         string             `bson:"models" json:"models"`
+	Group          string             `bson:"group" json:"group"`
+	UsedQuota      int64              `bson:"used_quota" json:"usedQuota"`
+	ModelMapping   string             `bson:"model_mapping" json:"modelMapping"`
+	Priority       int                `bson:"priority" json:"priority"`
+	AutoBan        int                `bson:"auto_ban" json:"autoBan"`
+	Tag            string             `bson:"tag" json:"tag"`
+	TestModel        string             `bson:"test_model" json:"testModel"`
+	CustomTestModels []string           `bson:"custom_test_models,omitempty" json:"customTestModels,omitempty"`
+	TestResult       string             `bson:"test_result" json:"testResult"`
+	TestError      string             `bson:"test_error" json:"testError"`
+	TestedAt       *time.Time         `bson:"tested_at,omitempty" json:"testedAt,omitempty"`
+	FetchedAt      time.Time          `bson:"fetched_at" json:"fetchedAt"`
+}
+
 type ModelDetectionJob struct {
 	ID             primitive.ObjectID     `bson:"_id,omitempty" json:"id"`
 	SiteID         primitive.ObjectID     `bson:"site_id" json:"siteId"`

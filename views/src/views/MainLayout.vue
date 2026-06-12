@@ -21,6 +21,10 @@
           <el-icon><Monitor /></el-icon>
           <span>模型检测</span>
         </el-menu-item>
+        <el-menu-item index="/channel-availability">
+          <el-icon><Connection /></el-icon>
+          <span>渠道可用性</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -41,6 +45,13 @@
           >
             模型检测
           </el-button>
+          <el-button
+            :type="route.path === '/channel-availability' ? 'primary' : 'default'"
+            :icon="Connection"
+            @click="router.push('/channel-availability')"
+          >
+            渠道可用性
+          </el-button>
         </div>
         <div class="header-title">
           <h1>{{ pageTitle }}</h1>
@@ -59,20 +70,19 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Coin, Monitor, SwitchButton } from '@element-plus/icons-vue'
+import { Coin, Monitor, Connection, SwitchButton } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
 
-const pageTitle = computed(() => (
-  route.path === '/model-detection' ? '模型真实性检测' : '余额管理'
-))
+const pageMeta = {
+  '/model-detection': { title: '模型真实性检测', description: '配置检测模型、提交 Veridrop 任务并跟踪报告' },
+  '/channel-availability': { title: '上游渠道可用性检测', description: '获取上游渠道列表，批量检测渠道可用性' },
+}
 
-const pageDescription = computed(() => (
-  route.path === '/model-detection'
-    ? '配置检测模型、提交 Veridrop 任务并跟踪报告'
-    : '维护渠道、查询余额、导入上游渠道并发送余额通知'
-))
+const pageTitle = computed(() => pageMeta[route.path]?.title || '余额管理')
+
+const pageDescription = computed(() => pageMeta[route.path]?.description || '维护渠道、查询余额、导入上游渠道并发送余额通知')
 
 const logout = () => {
   localStorage.removeItem('token')

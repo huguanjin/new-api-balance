@@ -19,6 +19,7 @@ func main() {
 	}
 	handlers.StartNotificationScheduler()
 	handlers.StartModelDetectionScheduler()
+	handlers.StartChannelAvailabilityScheduler()
 
 	r := gin.Default()
 	r.GET("/healthz", func(c *gin.Context) {
@@ -52,6 +53,20 @@ func main() {
 			protected.GET("/model-detection/jobs", handlers.GetModelDetectionJobsHandler)
 			protected.GET("/model-detection/jobs/:id/report", handlers.GetModelDetectionJobReportHandler)
 			protected.POST("/model-detection/jobs/:id/push", handlers.PushModelDetectionJobReportHandler)
+			protected.GET("/channel-availability/config", handlers.GetChannelAvailabilityConfigHandler)
+			protected.PUT("/channel-availability/config", handlers.SaveChannelAvailabilityConfigHandler)
+			protected.POST("/channel-availability/fetch", handlers.FetchUpstreamChannelsHandler)
+			protected.GET("/channel-availability/channels", handlers.GetUpstreamChannelsHandler)
+			protected.GET("/channel-availability/groups", handlers.FetchUpstreamGroupsHandler)
+			protected.POST("/channel-availability/test", handlers.TestChannelAvailabilityHandler)
+			protected.POST("/channel-availability/test/:channelId", handlers.TestSingleChannelAvailabilityHandler)
+			protected.POST("/channel-availability/test-models/:channelId", handlers.TestChannelModelsHandler)
+			protected.PUT("/channel-availability/channels/:channelId/test-models", handlers.SaveChannelCustomTestModelsHandler)
+			protected.POST("/channel-availability/batch-status", handlers.BatchUpdateChannelStatusHandler)
+			protected.GET("/channel-availability/notify-config", handlers.GetChannelAvailabilityNotifyConfigHandler)
+			protected.PUT("/channel-availability/notify-config", handlers.SaveChannelAvailabilityNotifyConfigHandler)
+			protected.POST("/channel-availability/notify-test", handlers.TestChannelAvailabilityNotifyHandler)
+			protected.POST("/channel-availability/notify-run", handlers.RunChannelAvailabilityNotifyHandler)
 			protected.Any("/proxy", handlers.ProxyHandler)
 		}
 	}

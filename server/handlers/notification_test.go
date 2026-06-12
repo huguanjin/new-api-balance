@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"balanceserver/models"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 func TestNotificationDueUsesActiveScheduleInterval(t *testing.T) {
@@ -189,5 +191,39 @@ func TestFormatNotificationTimeDefaultsToShanghai(t *testing.T) {
 
 	if got := formatNotificationTimeInLocation(utcTime, location); got != "2026-06-09 10:33:32" {
 		t.Fatalf("formatted notification time = %s, want 2026-06-09 10:33:32", got)
+	}
+}
+
+func TestModelDetectionReportLinksIncludePortalAndOriginalReport(t *testing.T) {
+	jobID := primitive.NewObjectID()
+	links := modelDetectionReportLinks(models.ModelDetectionNotificationConfig{
+		ReportBaseURL: "https://balance.example.com/app",
+	}, models.ModelDetectionJob{
+		ID:        jobID,
+		ResultURL: "https://veridrop.example.com/results/job-1",
+	})
+
+	if len(links) != 2 {
+		t.Fatalf("expected 2 report links, got %d", len(links))
+	}
+	if links[0].Label != "查看报告" || links[0].URL != "https://balance.example.com/app/model-detection?jobId="+jobID.Hex() {
+		t.Fatalf("unexpected portal report link: %+v", links[0])
+	}
+	if links[1].Label != "查看原始报告" || links[1].URL != "https://veridrop.example.com/results/job-1" {
+		t.Fatalf("unexpected original report link: %+v", links[1])
+	}
+}
+
+func TestModelDetectionReportLinksFallBackToOriginalReport(t *testing.T) {
+	links := modelDetectionReportLinks(models.ModelDetectionNotificationConfig{}, models.ModelDetectionJob{
+		ID:        primitive.NewObjectID(),
+		ResultURL: "https://veridrop.example.com/results/job-1",
+	})
+
+	if len(links) != 1 {
+		t.Fatalf("expected 1 report link, got %d", len(links))
+	}
+	if links[0].Label != "查看原始报告" {
+		t.Fatalf("expected original report fallback link, got %+v", links[0])
 	}
 }
