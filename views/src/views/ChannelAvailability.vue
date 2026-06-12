@@ -370,6 +370,14 @@
               <el-button type="danger" link size="small" @click="notifyForm.channelIds = []" :disabled="!notifyForm.channelIds.length">
                 清空
               </el-button>
+              <el-button
+                :type="notifyShowSelectedOnly ? 'warning' : 'info'"
+                link size="small"
+                @click="notifyShowSelectedOnly = !notifyShowSelectedOnly"
+                :disabled="!notifyForm.channelIds.length"
+              >
+                {{ notifyShowSelectedOnly ? '查看全部' : '仅看已选' }}
+              </el-button>
               <span class="notify-channel-count">已选 {{ notifyForm.channelIds.length }} 个</span>
             </div>
             <div class="notify-channel-list">
@@ -471,6 +479,7 @@ const notifyForm = ref({
 })
 const notifyMissingIds = ref([])
 const notifyChannelSearch = ref('')
+const notifyShowSelectedOnly = ref(false)
 
 const customModelDialogVisible = ref(false)
 const customModelChannelId = ref(0)
@@ -855,6 +864,8 @@ const openNotifyConfigDialog = async () => {
   notifyConfigDialogVisible.value = true
   notifyConfigLoading.value = true
   notifyMissingIds.value = []
+  notifyChannelSearch.value = ''
+  notifyShowSelectedOnly.value = false
   try {
     const res = await axios.get('/api/channel-availability/notify-config', {
       headers: authHeaders()
@@ -886,9 +897,14 @@ const openNotifyConfigDialog = async () => {
 }
 
 const filteredNotifyChannels = computed(() => {
+  let list = channels.value
+  if (notifyShowSelectedOnly.value) {
+    const selected = new Set(notifyForm.value.channelIds)
+    list = list.filter(ch => selected.has(ch.channelId))
+  }
   const keyword = notifyChannelSearch.value.trim().toLowerCase()
-  if (!keyword) return channels.value
-  return channels.value.filter(ch =>
+  if (!keyword) return list
+  return list.filter(ch =>
     String(ch.channelId).includes(keyword) ||
     (ch.name || '').toLowerCase().includes(keyword) ||
     (ch.group || '').toLowerCase().includes(keyword) ||
