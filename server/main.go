@@ -36,6 +36,7 @@ func main() {
 		protected.Use(handlers.AuthMiddleware())
 		{
 			protected.GET("/sites", handlers.GetSitesHandler)
+			protected.PUT("/user/password", handlers.ChangePasswordHandler)
 			protected.POST("/sites", handlers.SaveSitesHandler)
 			protected.PUT("/sites/:id/model-detection", handlers.SaveSiteModelDetectionHandler)
 			protected.POST("/balance/query", handlers.QueryBalanceHandler)

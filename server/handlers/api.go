@@ -38,6 +38,11 @@ type LoginRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
+type ChangePasswordRequest struct {
+	OldPassword string `json:"oldPassword" binding:"required"`
+	NewPassword string `json:"newPassword" binding:"required"`
+}
+
 type ImportChannelsRequest struct {
 	URL    string `json:"url" binding:"required"`
 	Token  string `json:"token" binding:"required"`
@@ -117,6 +122,50 @@ func LoginHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"token": tokenString})
+}
+
+func ChangePasswordHandler(c *gin.Context) {
+	var req ChangePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写完整的密码信息"})
+		return
+	}
+
+	if len(req.NewPassword) < 6 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "新密码长度不能少于6位"})
+		return
+	}
+
+	username, _ := c.Get("username")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var user models.User
+	err := UserCol.FindOne(ctx, bson.M{"username": username}).Decode(&user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "用户信息查询失败"})
+		return
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.OldPassword)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "原密码错误"})
+		return
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "密码加密失败"})
+		return
+	}
+
+	_, err = UserCol.UpdateOne(ctx, bson.M{"username": username}, bson.M{"$set": bson.M{"password": string(hashedPassword)}})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "密码更新失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "密码修改成功"})
 }
 
 func AuthMiddleware() gin.HandlerFunc {

@@ -65,9 +65,17 @@ type upstreamChannelListResponse struct {
 }
 
 type channelTestResult struct {
-	ChannelID    int    `json:"channelId"`
-	Name         string `json:"name"`
-	TestModel    string `json:"testModel"`
+	ChannelID    int                     `json:"channelId"`
+	Name         string                  `json:"name"`
+	TestModel    string                  `json:"testModel"`
+	Success      bool                    `json:"success"`
+	ResponseTime int                     `json:"responseTime"`
+	Error        string                  `json:"error,omitempty"`
+	ModelResults []channelModelTestDetail `json:"modelResults,omitempty"`
+}
+
+type channelModelTestDetail struct {
+	Model        string `json:"model"`
 	Success      bool   `json:"success"`
 	ResponseTime int    `json:"responseTime"`
 	Error        string `json:"error,omitempty"`
@@ -1057,30 +1065,65 @@ func testOneChannel(ctx context.Context, channel models.UpstreamChannel, baseURL
 		Name:      channel.Name,
 	}
 
-	model := testModel
-	if model == "" && len(channel.CustomTestModels) > 0 {
-		model = channel.CustomTestModels[0]
-	}
-	if model == "" {
-		model = channel.TestModel
-	}
-	if model == "" {
-		models := strings.Split(channel.Models, ",")
-		for _, m := range models {
+	var modelsToTest []string
+	if testModel != "" {
+		modelsToTest = []string{testModel}
+	} else if len(channel.CustomTestModels) > 0 {
+		modelsToTest = channel.CustomTestModels
+	} else if channel.TestModel != "" {
+		modelsToTest = []string{channel.TestModel}
+	} else {
+		parts := strings.Split(channel.Models, ",")
+		for _, m := range parts {
 			m = strings.TrimSpace(m)
 			if m != "" {
-				model = m
+				modelsToTest = []string{m}
 				break
 			}
 		}
 	}
-	if model == "" {
-		model = "gpt-3.5-turbo"
+	if len(modelsToTest) == 0 {
+		modelsToTest = []string{"gpt-3.5-turbo"}
 	}
-	result.TestModel = model
 
-	testURL := fmt.Sprintf("%s/api/channel/test/%d?model=%s", baseURL, channel.ChannelID, url.QueryEscape(model))
+	result.TestModel = strings.Join(modelsToTest, ", ")
 
+	if len(modelsToTest) == 1 {
+		detail := testSingleModel(ctx, channel.ChannelID, modelsToTest[0], baseURL, token, userID)
+		result.Success = detail.Success
+		result.ResponseTime = detail.ResponseTime
+		result.Error = detail.Error
+		return result
+	}
+
+	details := make([]channelModelTestDetail, len(modelsToTest))
+	allSuccess := true
+	maxResponseTime := 0
+	var failErrors []string
+	for i, m := range modelsToTest {
+		details[i] = testSingleModel(ctx, channel.ChannelID, m, baseURL, token, userID)
+		if !details[i].Success {
+			allSuccess = false
+			failErrors = append(failErrors, fmt.Sprintf("%s: %s", m, details[i].Error))
+		}
+		if details[i].ResponseTime > maxResponseTime {
+			maxResponseTime = details[i].ResponseTime
+		}
+	}
+
+	result.ModelResults = details
+	result.Success = allSuccess
+	result.ResponseTime = maxResponseTime
+	if !allSuccess {
+		result.Error = strings.Join(failErrors, "; ")
+	}
+	return result
+}
+
+func testSingleModel(ctx context.Context, channelID int, model, baseURL, token, userID string) channelModelTestDetail {
+	result := channelModelTestDetail{Model: model}
+
+	testURL := fmt.Sprintf("%s/api/channel/test/%d?model=%s", baseURL, channelID, url.QueryEscape(model))
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
 	if err != nil {
 		result.Error = "创建请求失败"
@@ -1419,6 +1462,23 @@ func autoToggleChannels(ctx context.Context, enabledFailed, disabledSuccess []ch
 	return results
 }
 
+func writeModelResultDetails(b *strings.Builder, r channelTestResult) {
+	if len(r.ModelResults) <= 1 {
+		return
+	}
+	for _, mr := range r.ModelResults {
+		if mr.Success {
+			b.WriteString(fmt.Sprintf("      ✅ %s | 响应: %dms\n", mr.Model, mr.ResponseTime))
+		} else {
+			errMsg := mr.Error
+			if len(errMsg) > 60 {
+				errMsg = errMsg[:60] + "..."
+			}
+			b.WriteString(fmt.Sprintf("      ❌ %s | 错误: %s\n", mr.Model, errMsg))
+		}
+	}
+}
+
 func buildAvailabilityNotifyMessage(allResults []channelTestResult, enabledFailed, disabledSuccess []channelTestResult, missingIDs []int, autoToggle bool, toggleResults []channelStatusChangeResult) string {
 	var b strings.Builder
 	successCount := 0
@@ -1447,6 +1507,7 @@ func buildAvailabilityNotifyMessage(allResults []channelTestResult, enabledFaile
 				}
 			}
 			b.WriteString(fmt.Sprintf("  ✅ %s (ID:%d) | 测试模型: %s | 响应: %dms | %s\n", r.Name, r.ChannelID, r.TestModel, r.ResponseTime, action))
+			writeModelResultDetails(&b, r)
 		}
 	}
 
@@ -1454,7 +1515,7 @@ func buildAvailabilityNotifyMessage(allResults []channelTestResult, enabledFaile
 		b.WriteString(fmt.Sprintf("\n🔴 以下已启用渠道测试失败（%d个）：\n", len(enabledFailed)))
 		for _, r := range enabledFailed {
 			errMsg := r.Error
-			if len(errMsg) > 80 {
+			if len(r.ModelResults) == 0 && len(errMsg) > 80 {
 				errMsg = errMsg[:80] + "..."
 			}
 			action := "建议：临时停用"
@@ -1465,7 +1526,12 @@ func buildAvailabilityNotifyMessage(allResults []channelTestResult, enabledFaile
 					action = "自动停用失败 ❗"
 				}
 			}
-			b.WriteString(fmt.Sprintf("  ❌ %s (ID:%d) | 测试模型: %s | 错误: %s | %s\n", r.Name, r.ChannelID, r.TestModel, errMsg, action))
+			if len(r.ModelResults) > 0 {
+				b.WriteString(fmt.Sprintf("  ❌ %s (ID:%d) | 测试模型: %s | %s\n", r.Name, r.ChannelID, r.TestModel, action))
+			} else {
+				b.WriteString(fmt.Sprintf("  ❌ %s (ID:%d) | 测试模型: %s | 错误: %s | %s\n", r.Name, r.ChannelID, r.TestModel, errMsg, action))
+			}
+			writeModelResultDetails(&b, r)
 		}
 	}
 

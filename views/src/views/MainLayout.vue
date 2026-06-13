@@ -57,20 +57,43 @@
           <h1>{{ pageTitle }}</h1>
           <span>{{ pageDescription }}</span>
         </div>
-        <el-button type="danger" plain :icon="SwitchButton" @click="logout">退出</el-button>
+        <div class="header-actions">
+          <el-button type="primary" plain :icon="Lock" @click="showPasswordDialog = true">修改密码</el-button>
+          <el-button type="danger" plain :icon="SwitchButton" @click="logout">退出</el-button>
+        </div>
       </el-header>
 
       <el-main class="app-main">
         <router-view />
       </el-main>
     </el-container>
+
+    <el-dialog v-model="showPasswordDialog" title="修改密码" width="420px" :close-on-click-modal="false">
+      <el-form :model="passwordForm" :rules="passwordRules" ref="passwordFormRef" label-width="80px">
+        <el-form-item label="原密码" prop="oldPassword">
+          <el-input v-model="passwordForm.oldPassword" type="password" placeholder="请输入原密码" show-password />
+        </el-form-item>
+        <el-form-item label="新密码" prop="newPassword">
+          <el-input v-model="passwordForm.newPassword" type="password" placeholder="请输入新密码（至少6位）" show-password />
+        </el-form-item>
+        <el-form-item label="确认密码" prop="confirmPassword">
+          <el-input v-model="passwordForm.confirmPassword" type="password" placeholder="请再次输入新密码" show-password />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showPasswordDialog = false">取消</el-button>
+        <el-button type="primary" :loading="changingPassword" @click="handleChangePassword">确认修改</el-button>
+      </template>
+    </el-dialog>
   </el-container>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Coin, Monitor, Connection, SwitchButton } from '@element-plus/icons-vue'
+import { Coin, Monitor, Connection, SwitchButton, Lock } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import axios from 'axios'
 
 const route = useRoute()
 const router = useRouter()
@@ -87,6 +110,63 @@ const pageDescription = computed(() => pageMeta[route.path]?.description || '维
 const logout = () => {
   localStorage.removeItem('token')
   router.push('/login')
+}
+
+const showPasswordDialog = ref(false)
+const changingPassword = ref(false)
+const passwordFormRef = ref(null)
+
+const passwordForm = reactive({
+  oldPassword: '',
+  newPassword: '',
+  confirmPassword: ''
+})
+
+const passwordRules = {
+  oldPassword: [{ required: true, message: '请输入原密码', trigger: 'blur' }],
+  newPassword: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    { min: 6, message: '密码长度不能少于6位', trigger: 'blur' }
+  ],
+  confirmPassword: [
+    { required: true, message: '请再次输入新密码', trigger: 'blur' },
+    {
+      validator: (rule, value, callback) => {
+        if (value !== passwordForm.newPassword) {
+          callback(new Error('两次输入的密码不一致'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur'
+    }
+  ]
+}
+
+const handleChangePassword = async () => {
+  if (!passwordFormRef.value) return
+  await passwordFormRef.value.validate(async (valid) => {
+    if (!valid) return
+    changingPassword.value = true
+    try {
+      const token = localStorage.getItem('token')
+      await axios.put('/api/user/password', {
+        oldPassword: passwordForm.oldPassword,
+        newPassword: passwordForm.newPassword
+      }, {
+        headers: { Authorization: 'Bearer ' + token }
+      })
+      ElMessage.success('密码修改成功')
+      showPasswordDialog.value = false
+      passwordForm.oldPassword = ''
+      passwordForm.newPassword = ''
+      passwordForm.confirmPassword = ''
+    } catch (error) {
+      ElMessage.error(error.response?.data?.error || '密码修改失败')
+    } finally {
+      changingPassword.value = false
+    }
+  })
 }
 </script>
 
@@ -187,6 +267,13 @@ const logout = () => {
 .app-main {
   padding: 20px 24px 28px;
   overflow-x: hidden;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .mobile-nav {
