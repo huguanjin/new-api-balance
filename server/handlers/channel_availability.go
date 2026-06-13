@@ -641,6 +641,35 @@ type channelStatusChangeResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
+func DeleteUpstreamChannelsHandler(c *gin.Context) {
+	var req struct {
+		ChannelIDs []int `json:"channelIds"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return
+	}
+	if len(req.ChannelIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择至少一个渠道"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	filter := bson.M{"channelId": bson.M{"$in": req.ChannelIDs}}
+	result, err := UpstreamChannelCol.DeleteMany(ctx, filter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除渠道失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": fmt.Sprintf("成功删除 %d 个渠道", result.DeletedCount),
+		"deleted": result.DeletedCount,
+	})
+}
+
 func BatchUpdateChannelStatusHandler(c *gin.Context) {
 	var req struct {
 		ChannelIDs []int `json:"channelIds"`
@@ -902,6 +931,7 @@ func fetchAllUpstreamChannelItems(ctx context.Context, channelURL, token, userID
 		query.Set("page_size", "100")
 	}
 
+	seen := make(map[int]struct{}, 200)
 	all := make([]upstreamChannelItem, 0, 200)
 	pageSize := positiveIntQuery(query, "page_size", 100)
 
@@ -913,7 +943,12 @@ func fetchAllUpstreamChannelItems(ctx context.Context, channelURL, token, userID
 		if err != nil {
 			return nil, err
 		}
-		all = append(all, items...)
+		for _, item := range items {
+			if _, dup := seen[item.ID]; !dup {
+				seen[item.ID] = struct{}{}
+				all = append(all, item)
+			}
+		}
 		if len(items) == 0 || len(items) < pageSize {
 			break
 		}
@@ -961,6 +996,15 @@ func fetchUpstreamChannelItemPage(ctx context.Context, pageURL, token, userID st
 }
 
 func saveUpstreamChannels(ctx context.Context, items []upstreamChannelItem) error {
+	existing, err := listUpstreamChannels(ctx)
+	if err != nil {
+		return err
+	}
+	preserve := make(map[int]models.UpstreamChannel, len(existing))
+	for _, ch := range existing {
+		preserve[ch.ChannelID] = ch
+	}
+
 	if _, err := UpstreamChannelCol.DeleteMany(ctx, bson.M{}); err != nil {
 		return err
 	}
@@ -992,10 +1036,16 @@ func saveUpstreamChannels(ctx context.Context, items []upstreamChannelItem) erro
 			TestModel:    strings.TrimSpace(item.TestModel),
 			FetchedAt:    now,
 		}
+		if old, ok := preserve[item.ID]; ok {
+			doc.CustomTestModels = old.CustomTestModels
+			doc.TestResult = old.TestResult
+			doc.TestError = old.TestError
+			doc.TestedAt = old.TestedAt
+		}
 		docs = append(docs, doc)
 	}
 
-	_, err := UpstreamChannelCol.InsertMany(ctx, docs)
+	_, err = UpstreamChannelCol.InsertMany(ctx, docs)
 	return err
 }
 

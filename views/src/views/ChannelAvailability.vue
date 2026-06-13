@@ -7,6 +7,7 @@
         <el-button type="success" @click="openBatchTestDialog" :disabled="!selectedChannels.length">批量测试 ({{ selectedChannels.length }})</el-button>
         <el-button type="warning" @click="batchEnableChannels" :loading="batchEnabling" :disabled="!selectedChannels.length">批量启用</el-button>
         <el-button type="danger" @click="batchDisableChannels" :loading="batchDisabling" :disabled="!selectedChannels.length">批量禁用</el-button>
+        <el-button type="danger" plain @click="batchDeleteChannels" :loading="batchDeleting" :disabled="!selectedChannels.length">批量删除</el-button>
         <el-button @click="openConfigDialog">鉴权配置</el-button>
         <el-button type="info" @click="openNotifyConfigDialog">推送配置</el-button>
       </div>
@@ -442,6 +443,7 @@ const fetching = ref(false)
 const testingSelected = ref(false)
 const batchEnabling = ref(false)
 const batchDisabling = ref(false)
+const batchDeleting = ref(false)
 const testingChannelIds = ref(new Set())
 const selectedChannels = ref([])
 const statusFilter = ref('all')
@@ -674,6 +676,33 @@ const batchDisableChannels = async () => {
     )
   } catch { return }
   await batchUpdateStatus(2)
+}
+
+const batchDeleteChannels = async () => {
+  if (!selectedChannels.value.length) return
+  try {
+    await ElMessageBox.confirm(
+      `确认删除选中的 ${selectedChannels.value.length} 个渠道？此操作仅删除本地拉取的数据，不影响上游渠道。`,
+      '批量删除',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch { return }
+  batchDeleting.value = true
+  const ids = selectedChannels.value.map(ch => ch.channelId)
+  try {
+    const res = await axios.post('/api/channel-availability/delete', {
+      channelIds: ids
+    }, {
+      headers: authHeaders()
+    })
+    channels.value = channels.value.filter(ch => !ids.includes(ch.channelId))
+    selectedChannels.value = []
+    ElMessage.success(res.data?.message || '删除成功')
+  } catch (err) {
+    ElMessage.error(err.response?.data?.error || '删除失败')
+  } finally {
+    batchDeleting.value = false
+  }
 }
 
 const batchUpdateStatus = async (status) => {
