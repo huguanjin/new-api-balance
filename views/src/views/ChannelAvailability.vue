@@ -336,6 +336,11 @@
           <el-switch v-model="notifyForm.autoToggle" />
           <div class="form-tip">开启后：已启用但测试失败的渠道将自动停用，已禁用但测试成功的渠道将自动启用</div>
         </el-form-item>
+        <el-form-item label="响应超时停用">
+          <el-input-number v-model="notifyForm.slowThresholdMs" :min="0" :step="1000" style="width: 180px" />
+          <span style="margin-left: 8px; color: #606266; font-size: 13px">ms</span>
+          <div class="form-tip">已启用渠道测试成功但响应时间超过此阈值时自动停用；设为 0 表示不开启</div>
+        </el-form-item>
         <el-form-item label="推送计划">
           <div class="schedules-wrapper">
             <div v-for="(sch, idx) in notifyForm.schedules" :key="idx" class="schedule-row">
@@ -475,6 +480,7 @@ const notifyForm = ref({
   statusFilter: 0,
   refreshChannels: true,
   autoToggle: false,
+  slowThresholdMs: 0,
   schedules: []
 })
 const notifyMissingIds = ref([])
@@ -880,6 +886,7 @@ const openNotifyConfigDialog = async () => {
       statusFilter: res.data?.statusFilter ?? 0,
       refreshChannels: res.data?.refreshChannels ?? true,
       autoToggle: res.data?.autoToggle || false,
+      slowThresholdMs: res.data?.slowThresholdMs ?? 0,
       schedules: (res.data?.schedules || []).map(s => ({
         startTime: s.start_time || '',
         endTime: s.end_time || '',

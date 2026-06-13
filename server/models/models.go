@@ -106,6 +106,7 @@ type ChannelAvailabilityNotifyConfig struct {
 	StatusFilter     int                    `bson:"status_filter" json:"statusFilter"`
 	RefreshChannels  *bool                  `bson:"refresh_channels" json:"refreshChannels"`
 	AutoToggle       bool                   `bson:"auto_toggle" json:"autoToggle"`
+	SlowThresholdMs  int                    `bson:"slow_threshold_ms" json:"slowThresholdMs"`
 	Schedules        []NotificationSchedule `bson:"schedules" json:"schedules"`
 	LastAttemptAt    *time.Time             `bson:"last_attempt_at,omitempty" json:"lastAttemptAt,omitempty"`
 	UpdatedAt        time.Time              `bson:"updated_at" json:"updatedAt"`

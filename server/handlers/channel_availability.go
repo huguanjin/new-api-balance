@@ -1220,6 +1220,7 @@ func SaveChannelAvailabilityNotifyConfigHandler(c *gin.Context) {
 		"status_filter":      req.StatusFilter,
 		"refresh_channels":   req.RefreshChannels,
 		"auto_toggle":        req.AutoToggle,
+		"slow_threshold_ms":  req.SlowThresholdMs,
 		"schedules":          req.Schedules,
 		"updated_at":         now,
 	}
@@ -1347,6 +1348,7 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 
 	var enabledFailed []channelTestResult
 	var disabledSuccess []channelTestResult
+	var enabledSlow []channelTestResult
 	successCount := 0
 	for _, r := range results {
 		if r.Success {
@@ -1357,18 +1359,24 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 			enabledFailed = append(enabledFailed, r)
 		} else if status == 2 && r.Success {
 			disabledSuccess = append(disabledSuccess, r)
+		} else if status == 1 && r.Success && notifyConfig.SlowThresholdMs > 0 && r.ResponseTime > notifyConfig.SlowThresholdMs {
+			enabledSlow = append(enabledSlow, r)
 		}
 	}
 
 	var toggleResults []channelStatusChangeResult
-	if notifyConfig.AutoToggle && (len(enabledFailed) > 0 || len(disabledSuccess) > 0) {
+	if notifyConfig.AutoToggle && (len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0) {
 		toggleResults = autoToggleChannels(ctx, enabledFailed, disabledSuccess, cred)
+		for _, r := range enabledSlow {
+			tr := updateOneChannelStatus(ctx, r.ChannelID, r.Name, 2, cred)
+			toggleResults = append(toggleResults, tr)
+		}
 	}
 
 	notified := false
 	notifyErrMsg := ""
-	if len(enabledFailed) > 0 || len(disabledSuccess) > 0 {
-		msg := buildAvailabilityNotifyMessage(results, enabledFailed, disabledSuccess, missingIDs, notifyConfig.AutoToggle, toggleResults)
+	if len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0 {
+		msg := buildAvailabilityNotifyMessage(results, enabledFailed, disabledSuccess, enabledSlow, missingIDs, notifyConfig.AutoToggle, notifyConfig.SlowThresholdMs, toggleResults)
 		if err := sendAvailabilityNotification(ctx, nType, webhookURL, signKey, msg); err != nil {
 			notifyErrMsg = err.Error()
 		} else {
@@ -1389,6 +1397,7 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 		"notified":        notified,
 		"enabledFailed":   len(enabledFailed),
 		"disabledSuccess": len(disabledSuccess),
+		"enabledSlow":     len(enabledSlow),
 		"autoToggled":     len(toggleResults),
 		"results":         results,
 	}
@@ -1479,7 +1488,7 @@ func writeModelResultDetails(b *strings.Builder, r channelTestResult) {
 	}
 }
 
-func buildAvailabilityNotifyMessage(allResults []channelTestResult, enabledFailed, disabledSuccess []channelTestResult, missingIDs []int, autoToggle bool, toggleResults []channelStatusChangeResult) string {
+func buildAvailabilityNotifyMessage(allResults []channelTestResult, enabledFailed, disabledSuccess, enabledSlow []channelTestResult, missingIDs []int, autoToggle bool, slowThresholdMs int, toggleResults []channelStatusChangeResult) string {
 	var b strings.Builder
 	successCount := 0
 	for _, r := range allResults {
@@ -1535,11 +1544,27 @@ func buildAvailabilityNotifyMessage(allResults []channelTestResult, enabledFaile
 		}
 	}
 
+	if len(enabledSlow) > 0 {
+		b.WriteString(fmt.Sprintf("\n🟡 以下已启用渠道响应超时（%d个，阈值 %dms）：\n", len(enabledSlow), slowThresholdMs))
+		for _, r := range enabledSlow {
+			action := "建议：临时停用"
+			if autoToggle {
+				if toggleResultMap[r.ChannelID] {
+					action = "已自动停用 ✅"
+				} else {
+					action = "自动停用失败 ❗"
+				}
+			}
+			b.WriteString(fmt.Sprintf("  ⏱️ %s (ID:%d) | 测试模型: %s | 响应: %dms | %s\n", r.Name, r.ChannelID, r.TestModel, r.ResponseTime, action))
+			writeModelResultDetails(&b, r)
+		}
+	}
+
 	if len(missingIDs) > 0 {
 		b.WriteString(fmt.Sprintf("\n⚠️ 以下配置的渠道 ID 在上游已不存在：%v\n", missingIDs))
 	}
 
-	if len(enabledFailed) == 0 && len(disabledSuccess) == 0 {
+	if len(enabledFailed) == 0 && len(disabledSuccess) == 0 && len(enabledSlow) == 0 {
 		b.WriteString("\n所有渠道状态正常，无需调整。\n")
 	}
 
@@ -1648,22 +1673,29 @@ func runScheduledChannelAvailabilityNotify() {
 
 	var enabledFailed []channelTestResult
 	var disabledSuccess []channelTestResult
+	var enabledSlow []channelTestResult
 	for _, r := range results {
 		status := channelStatusMap[r.ChannelID]
 		if status == 1 && !r.Success {
 			enabledFailed = append(enabledFailed, r)
 		} else if status == 2 && r.Success {
 			disabledSuccess = append(disabledSuccess, r)
+		} else if status == 1 && r.Success && config.SlowThresholdMs > 0 && r.ResponseTime > config.SlowThresholdMs {
+			enabledSlow = append(enabledSlow, r)
 		}
 	}
 
 	var toggleResults []channelStatusChangeResult
-	if config.AutoToggle && (len(enabledFailed) > 0 || len(disabledSuccess) > 0) {
+	if config.AutoToggle && (len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0) {
 		toggleResults = autoToggleChannels(ctx, enabledFailed, disabledSuccess, cred)
+		for _, r := range enabledSlow {
+			tr := updateOneChannelStatus(ctx, r.ChannelID, r.Name, 2, cred)
+			toggleResults = append(toggleResults, tr)
+		}
 	}
 
-	if len(enabledFailed) > 0 || len(disabledSuccess) > 0 {
-		msg := buildAvailabilityNotifyMessage(results, enabledFailed, disabledSuccess, missingIDs, config.AutoToggle, toggleResults)
+	if len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0 {
+		msg := buildAvailabilityNotifyMessage(results, enabledFailed, disabledSuccess, enabledSlow, missingIDs, config.AutoToggle, config.SlowThresholdMs, toggleResults)
 		if err := sendAvailabilityNotification(ctx, nType, webhookURL, signKey, msg); err != nil {
 			log.Printf("[channel-availability-scheduler] send notification error: %v", err)
 		}
