@@ -147,6 +147,27 @@ type UpstreamChannel struct {
 	FetchedAt      time.Time          `bson:"fetched_at" json:"fetchedAt"`
 }
 
+type ChannelTestResultDetail struct {
+	Model        string `bson:"model" json:"model"`
+	Success      bool   `bson:"success" json:"success"`
+	ResponseTime int    `bson:"response_time" json:"responseTime"`
+	Error        string `bson:"error,omitempty" json:"error,omitempty"`
+}
+
+type ChannelTestResult struct {
+	ID           primitive.ObjectID       `bson:"_id,omitempty" json:"id"`
+	RunID        string                   `bson:"run_id" json:"runId"`
+	ChannelID    int                      `bson:"channel_id" json:"channelId"`
+	Name         string                   `bson:"name" json:"name"`
+	TestModel    string                   `bson:"test_model" json:"testModel"`
+	Success      bool                     `bson:"success" json:"success"`
+	ResponseTime int                      `bson:"response_time" json:"responseTime"`
+	Error        string                   `bson:"error,omitempty" json:"error,omitempty"`
+	ModelResults []ChannelTestResultDetail `bson:"model_results,omitempty" json:"modelResults,omitempty"`
+	Status       int                      `bson:"status" json:"status"`
+	TestedAt     time.Time                `bson:"tested_at" json:"testedAt"`
+}
+
 type ModelDetectionJob struct {
 	ID             primitive.ObjectID     `bson:"_id,omitempty" json:"id"`
 	SiteID         primitive.ObjectID     `bson:"site_id" json:"siteId"`

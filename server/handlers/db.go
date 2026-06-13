@@ -28,6 +28,7 @@ var (
 	ChannelAvailabilityConfigCol  *mongo.Collection
 	ChannelAvailabilityNotifyCol *mongo.Collection
 	UpstreamChannelCol           *mongo.Collection
+	ChannelTestResultCol         *mongo.Collection
 )
 
 type mongoConfigFile struct {
@@ -69,6 +70,7 @@ func InitDB() error {
 	ChannelAvailabilityConfigCol = db.Collection("channel_availability_configs")
 	ChannelAvailabilityNotifyCol = db.Collection("channel_availability_notify_configs")
 	UpstreamChannelCol = db.Collection("upstream_channels")
+	ChannelTestResultCol = db.Collection("channel_test_results")
 
 	// Ensure admin exists
 	err = ensureAdminExists()
