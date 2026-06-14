@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,9 +32,10 @@ const (
 var channelAvailabilityHTTPClient = &http.Client{Timeout: channelTestTimeout}
 
 type channelAvailabilityConfigRequest struct {
-	URL    string `json:"url"`
-	Token  string `json:"token"`
-	UserID string `json:"userId"`
+	URL             string `json:"url"`
+	Token           string `json:"token"`
+	UserID          string `json:"userId"`
+	SkipStatusCodes []int  `json:"skipStatusCodes"`
 }
 
 type upstreamChannelItem struct {
@@ -102,9 +104,10 @@ func SaveChannelAvailabilityConfigHandler(c *gin.Context) {
 	}
 
 	config := models.ChannelAvailabilityConfig{
-		URL:    strings.TrimSpace(req.URL),
-		Token:  strings.TrimSpace(req.Token),
-		UserID: strings.TrimSpace(req.UserID),
+		URL:             strings.TrimSpace(req.URL),
+		Token:           strings.TrimSpace(req.Token),
+		UserID:          strings.TrimSpace(req.UserID),
+		SkipStatusCodes: req.SkipStatusCodes,
 	}
 
 	if config.URL != "" {
@@ -298,7 +301,7 @@ func TestChannelAvailabilityHandler(c *gin.Context) {
 	testModel := strings.TrimSpace(req.TestModel)
 	runID := fmt.Sprintf("test-%d", time.Now().UnixNano())
 	cleanTestResults(ctx, "")
-	if err := batchTestChannels(ctx, channels, baseURL, reqToken, reqUserID, testModel, runID); err != nil {
+	if err := batchTestChannels(ctx, channels, baseURL, reqToken, reqUserID, testModel, runID, config.SkipStatusCodes); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "测试结果写入失败"})
 		return
 	}
@@ -392,7 +395,7 @@ func TestSingleChannelAvailabilityHandler(c *gin.Context) {
 	}
 
 	testModel := strings.TrimSpace(req.TestModel)
-	result := testOneChannel(ctx, channel, baseURL, reqToken, reqUserID, testModel)
+	result := testOneChannel(ctx, channel, baseURL, reqToken, reqUserID, testModel, config.SkipStatusCodes)
 
 	now := time.Now()
 	update := bson.M{
@@ -577,9 +580,15 @@ func testOneModel(ctx context.Context, channelID int, model string, cred availab
 			result.ResponseTime = int(payload.Time * 1000)
 		}
 	} else {
-		result.Error = payload.Message
-		if result.Error == "" {
-			result.Error = "测试未通过"
+		errMsg := payload.Message
+		if errMsg == "" {
+			errMsg = "测试未通过"
+		}
+		if isSkippedStatusCode(errMsg, cred.SkipStatusCodes) {
+			result.Success = true
+			result.Error = errMsg + " (已过滤)"
+		} else {
+			result.Error = errMsg
 		}
 	}
 	result.Message = payload.Message
@@ -587,9 +596,10 @@ func testOneModel(ctx context.Context, channelID int, model string, cred availab
 }
 
 type availabilityCredentials struct {
-	BaseURL string
-	Token   string
-	UserID  string
+	BaseURL         string
+	Token           string
+	UserID          string
+	SkipStatusCodes []int
 }
 
 func resolveAvailabilityCredentials(ctx context.Context) (availabilityCredentials, error) {
@@ -599,8 +609,9 @@ func resolveAvailabilityCredentials(ctx context.Context) (availabilityCredential
 	}
 
 	cred := availabilityCredentials{
-		Token:  strings.TrimSpace(config.Token),
-		UserID: strings.TrimSpace(config.UserID),
+		Token:           strings.TrimSpace(config.Token),
+		UserID:          strings.TrimSpace(config.UserID),
+		SkipStatusCodes: config.SkipStatusCodes,
 	}
 
 	if u := strings.TrimSpace(config.URL); u != "" {
@@ -914,10 +925,11 @@ func loadChannelAvailabilityConfig(ctx context.Context) (models.ChannelAvailabil
 func saveChannelAvailabilityConfig(ctx context.Context, config models.ChannelAvailabilityConfig) error {
 	now := time.Now()
 	update := bson.M{
-		"url":        strings.TrimSpace(config.URL),
-		"token":      strings.TrimSpace(config.Token),
-		"userId":     strings.TrimSpace(config.UserID),
-		"updated_at": now,
+		"url":               strings.TrimSpace(config.URL),
+		"token":             strings.TrimSpace(config.Token),
+		"userId":            strings.TrimSpace(config.UserID),
+		"skip_status_codes": config.SkipStatusCodes,
+		"updated_at":        now,
 	}
 	opts := options.Update().SetUpsert(true)
 	_, err := ChannelAvailabilityConfigCol.UpdateOne(ctx, bson.M{"_id": channelAvailabilityConfigID}, bson.M{"$set": update}, opts)
@@ -1099,7 +1111,7 @@ func listUpstreamChannels(ctx context.Context) ([]models.UpstreamChannel, error)
 	return channels, nil
 }
 
-func batchTestChannels(ctx context.Context, channels []models.UpstreamChannel, baseURL, token, userID, testModel, runID string) error {
+func batchTestChannels(ctx context.Context, channels []models.UpstreamChannel, baseURL, token, userID, testModel, runID string, skipStatusCodes []int) error {
 	sem := make(chan struct{}, channelTestConcurrency)
 	var wg sync.WaitGroup
 	var firstErr error
@@ -1112,7 +1124,7 @@ func batchTestChannels(ctx context.Context, channels []models.UpstreamChannel, b
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			result := testOneChannel(ctx, channel, baseURL, token, userID, testModel)
+			result := testOneChannel(ctx, channel, baseURL, token, userID, testModel, skipStatusCodes)
 
 			now := time.Now()
 			update := bson.M{
@@ -1234,7 +1246,7 @@ func classifyTestResults(ctx context.Context, runID string, slowThresholdMs int)
 	return cr, nil
 }
 
-func testOneChannel(ctx context.Context, channel models.UpstreamChannel, baseURL, token, userID, testModel string) channelTestResult {
+func testOneChannel(ctx context.Context, channel models.UpstreamChannel, baseURL, token, userID, testModel string, skipStatusCodes []int) channelTestResult {
 	result := channelTestResult{
 		ChannelID: channel.ChannelID,
 		Name:      channel.Name,
@@ -1264,7 +1276,7 @@ func testOneChannel(ctx context.Context, channel models.UpstreamChannel, baseURL
 	result.TestModel = strings.Join(modelsToTest, ", ")
 
 	if len(modelsToTest) == 1 {
-		detail := testSingleModel(ctx, channel.ChannelID, modelsToTest[0], baseURL, token, userID)
+		detail := testSingleModel(ctx, channel.ChannelID, modelsToTest[0], baseURL, token, userID, skipStatusCodes)
 		result.Success = detail.Success
 		result.ResponseTime = detail.ResponseTime
 		result.Error = detail.Error
@@ -1276,7 +1288,7 @@ func testOneChannel(ctx context.Context, channel models.UpstreamChannel, baseURL
 	maxResponseTime := 0
 	var failErrors []string
 	for i, m := range modelsToTest {
-		details[i] = testSingleModel(ctx, channel.ChannelID, m, baseURL, token, userID)
+		details[i] = testSingleModel(ctx, channel.ChannelID, m, baseURL, token, userID, skipStatusCodes)
 		if !details[i].Success {
 			allSuccess = false
 			failErrors = append(failErrors, fmt.Sprintf("%s: %s", m, details[i].Error))
@@ -1295,7 +1307,7 @@ func testOneChannel(ctx context.Context, channel models.UpstreamChannel, baseURL
 	return result
 }
 
-func testSingleModel(ctx context.Context, channelID int, model, baseURL, token, userID string) channelModelTestDetail {
+func testSingleModel(ctx context.Context, channelID int, model, baseURL, token, userID string, skipStatusCodes []int) channelModelTestDetail {
 	result := channelModelTestDetail{Model: model}
 
 	testURL := fmt.Sprintf("%s/api/channel/test/%d?model=%s", baseURL, channelID, url.QueryEscape(model))
@@ -1348,10 +1360,37 @@ func testSingleModel(ctx context.Context, channelID int, model, baseURL, token, 
 		if msg, ok := payload["message"].(string); ok && msg != "" {
 			errMsg = msg
 		}
-		result.Error = errMsg
+		if isSkippedStatusCode(errMsg, skipStatusCodes) {
+			result.Success = true
+			result.Error = errMsg + " (已过滤)"
+		} else {
+			result.Error = errMsg
+		}
 	}
 
 	return result
+}
+
+var statusCodePattern = regexp.MustCompile(`(?i)status.?code\D*(\d{3})`)
+
+func isSkippedStatusCode(errMsg string, skipCodes []int) bool {
+	if len(skipCodes) == 0 {
+		return false
+	}
+	matches := statusCodePattern.FindStringSubmatch(errMsg)
+	if len(matches) < 2 {
+		return false
+	}
+	code, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return false
+	}
+	for _, sc := range skipCodes {
+		if sc == code {
+			return true
+		}
+	}
+	return false
 }
 
 const channelAvailabilityNotifyConfigID = "channel_availability_notify"
@@ -1516,7 +1555,7 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 
 	runID := fmt.Sprintf("notify-%d", time.Now().UnixNano())
 	cleanTestResults(ctx, "")
-	if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID); err != nil {
+	if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, cred.SkipStatusCodes); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "测试结果写入失败"})
 		return
 	}
@@ -1837,7 +1876,7 @@ func runScheduledChannelAvailabilityNotify() {
 
 	runID := fmt.Sprintf("sched-%d", time.Now().UnixNano())
 	cleanTestResults(ctx, "")
-	if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID); err != nil {
+	if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, cred.SkipStatusCodes); err != nil {
 		log.Printf("[channel-availability-scheduler] write test results error: %v", err)
 		return
 	}

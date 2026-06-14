@@ -113,11 +113,12 @@ type ChannelAvailabilityNotifyConfig struct {
 }
 
 type ChannelAvailabilityConfig struct {
-	ID        string    `bson:"_id,omitempty" json:"-"`
-	URL       string    `bson:"url" json:"url"`
-	Token     string    `bson:"token" json:"token"`
-	UserID    string    `bson:"userId" json:"userId"`
-	UpdatedAt time.Time `bson:"updated_at" json:"updated_at"`
+	ID              string    `bson:"_id,omitempty" json:"-"`
+	URL             string    `bson:"url" json:"url"`
+	Token           string    `bson:"token" json:"token"`
+	UserID          string    `bson:"userId" json:"userId"`
+	SkipStatusCodes []int     `bson:"skip_status_codes,omitempty" json:"skipStatusCodes,omitempty"`
+	UpdatedAt       time.Time `bson:"updated_at" json:"updated_at"`
 }
 
 type UpstreamChannel struct {

@@ -286,6 +286,20 @@
         <el-form-item label="New-Api-User">
           <el-input v-model="configForm.userId" placeholder="如 1" />
         </el-form-item>
+        <el-form-item label="过滤状态码">
+          <el-select
+            v-model="configForm.skipStatusCodes"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            placeholder="如 429、502 等"
+            style="width: 100%"
+          >
+            <el-option v-for="code in commonStatusCodes" :key="code.value" :label="code.label" :value="code.value" />
+          </el-select>
+          <div class="form-tip">测试返回包含这些状态码的错误时视为通过，不触发停用；留空则按默认规则判定</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -456,7 +470,13 @@ const tableRef = ref(null)
 const configDialogVisible = ref(false)
 const configLoading = ref(false)
 const savingConfig = ref(false)
-const configForm = ref({ url: '', token: '', userId: '1' })
+const configForm = ref({ url: '', token: '', userId: '1', skipStatusCodes: [] })
+const commonStatusCodes = [
+  { label: '429 Too Many Requests', value: 429 },
+  { label: '502 Bad Gateway', value: 502 },
+  { label: '503 Service Unavailable', value: 503 },
+  { label: '504 Gateway Timeout', value: 504 },
+]
 
 const modelTestDialogVisible = ref(false)
 const modelTestChannelId = ref(0)
@@ -1113,7 +1133,8 @@ const openConfigDialog = async () => {
     configForm.value = {
       url: res.data?.url || '',
       token: res.data?.token || '',
-      userId: res.data?.userId || '1'
+      userId: res.data?.userId || '1',
+      skipStatusCodes: res.data?.skipStatusCodes || []
     }
   } catch (err) {
     ElMessage.error('获取配置失败')
@@ -1128,7 +1149,8 @@ const saveConfig = async () => {
     await axios.put('/api/channel-availability/config', {
       url: configForm.value.url.trim(),
       token: configForm.value.token.trim(),
-      userId: configForm.value.userId.trim()
+      userId: configForm.value.userId.trim(),
+      skipStatusCodes: (configForm.value.skipStatusCodes || []).map(Number).filter(n => n > 0)
     }, {
       headers: authHeaders()
     })
