@@ -19,24 +19,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 const (
-	channelAvailabilityConfigID = "channel_availability"
-	channelTestConcurrency      = 10
-	channelTestTimeout          = 30 * time.Second
+	channelTestConcurrency = 10
+	channelTestTimeout     = 30 * time.Second
 )
 
 var channelAvailabilityHTTPClient = &http.Client{Timeout: channelTestTimeout}
-
-type channelAvailabilityConfigRequest struct {
-	URL             string `json:"url"`
-	Token           string `json:"token"`
-	UserID          string `json:"userId"`
-	SkipStatusCodes []int  `json:"skipStatusCodes"`
-}
 
 type upstreamChannelItem struct {
 	ID               int    `json:"id"`
@@ -83,112 +76,42 @@ type channelModelTestDetail struct {
 	Error        string `json:"error,omitempty"`
 }
 
-func GetChannelAvailabilityConfigHandler(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	config, err := loadChannelAvailabilityConfig(ctx)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load channel availability config"})
-		return
-	}
-
-	c.JSON(http.StatusOK, config)
-}
-
-func SaveChannelAvailabilityConfigHandler(c *gin.Context) {
-	var req channelAvailabilityConfigRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
-		return
-	}
-
-	config := models.ChannelAvailabilityConfig{
-		URL:             strings.TrimSpace(req.URL),
-		Token:           strings.TrimSpace(req.Token),
-		UserID:          strings.TrimSpace(req.UserID),
-		SkipStatusCodes: req.SkipStatusCodes,
-	}
-
-	if config.URL != "" {
-		if err := validateChannelAvailabilityURL(config.URL); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := saveChannelAvailabilityConfig(ctx, config); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save config"})
-		return
-	}
-
-	config.ID = channelAvailabilityConfigID
-	config.UpdatedAt = time.Now()
-	c.JSON(http.StatusOK, config)
-}
-
 func FetchUpstreamChannelsHandler(c *gin.Context) {
+	var req struct {
+		UpstreamSiteID string `json:"upstreamSiteId"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
+		return
+	}
+	siteID, err := primitive.ObjectIDFromHex(strings.TrimSpace(req.UpstreamSiteID))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择上游站点"})
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	config, err := loadChannelAvailabilityConfig(ctx)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load config"})
-		return
-	}
-
-	reqURL := strings.TrimSpace(config.URL)
-	reqToken := strings.TrimSpace(config.Token)
-	reqUserID := strings.TrimSpace(config.UserID)
-
-	if reqURL == "" || reqToken == "" {
-		importConfig, importErr := loadChannelImportConfig(ctx)
-		if importErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "请先配置鉴权密钥，或在余额管理中配置上游渠道导入信息"})
-			return
-		}
-		if reqURL == "" {
-			reqURL = strings.TrimSpace(importConfig.URL)
-		}
-		if reqToken == "" {
-			reqToken = strings.TrimSpace(importConfig.Token)
-		}
-		if reqUserID == "" {
-			reqUserID = strings.TrimSpace(importConfig.UserID)
-		}
-	}
-
-	if reqURL == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请先配置渠道接口 URL"})
-		return
-	}
-	if reqToken == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请先配置 Bearer Token"})
-		return
-	}
-
-	baseURL, err := extractChannelAPIBaseURL(reqURL)
+	cred, err := resolveCredentialsFromSite(ctx, siteID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	channelURL := baseURL + "/api/channel/"
-	channels, err := fetchAllUpstreamChannelItems(ctx, channelURL, reqToken, reqUserID)
+	channelURL := cred.BaseURL + "/api/channel/"
+	channels, err := fetchAllUpstreamChannelItems(ctx, channelURL, cred.Token, cred.UserID)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := saveUpstreamChannels(ctx, channels); err != nil {
+	if err := saveUpstreamChannels(ctx, channels, siteID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save upstream channels"})
 		return
 	}
 
-	stored, err := listUpstreamChannels(ctx)
+	stored, err := listUpstreamChannels(ctx, siteID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load saved channels"})
 		return
@@ -205,7 +128,18 @@ func GetUpstreamChannelsHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	channels, err := listUpstreamChannels(ctx)
+	siteIDStr := strings.TrimSpace(c.Query("upstreamSiteId"))
+	if siteIDStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择上游站点"})
+		return
+	}
+	siteID, err := primitive.ObjectIDFromHex(siteIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的站点 ID"})
+		return
+	}
+
+	channels, err := listUpstreamChannels(ctx, siteID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load upstream channels"})
 		return
@@ -216,63 +150,30 @@ func GetUpstreamChannelsHandler(c *gin.Context) {
 
 func TestChannelAvailabilityHandler(c *gin.Context) {
 	var req struct {
-		ChannelIDs []int  `json:"channelIds"`
-		TestModel  string `json:"testModel"`
+		UpstreamSiteID string `json:"upstreamSiteId"`
+		ChannelIDs     []int  `json:"channelIds"`
+		TestModel      string `json:"testModel"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return
+	}
+	siteID, err := primitive.ObjectIDFromHex(strings.TrimSpace(req.UpstreamSiteID))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择上游站点"})
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	config, err := loadChannelAvailabilityConfig(ctx)
+	cred, err := resolveCredentialsFromSite(ctx, siteID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load config"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	reqToken := strings.TrimSpace(config.Token)
-	reqUserID := strings.TrimSpace(config.UserID)
-	if reqToken == "" {
-		importConfig, importErr := loadChannelImportConfig(ctx)
-		if importErr == nil {
-			if reqToken == "" {
-				reqToken = strings.TrimSpace(importConfig.Token)
-			}
-			if reqUserID == "" {
-				reqUserID = strings.TrimSpace(importConfig.UserID)
-			}
-		}
-	}
-
-	baseURL := ""
-	if u := strings.TrimSpace(config.URL); u != "" {
-		base, err := extractChannelAPIBaseURL(u)
-		if err == nil {
-			baseURL = base
-		}
-	}
-	if baseURL == "" {
-		importConfig, _ := loadChannelImportConfig(ctx)
-		if u := strings.TrimSpace(importConfig.URL); u != "" {
-			base, err := extractChannelAPIBaseURL(u)
-			if err == nil {
-				baseURL = base
-			}
-		}
-	}
-	if baseURL == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请先配置渠道接口地址"})
-		return
-	}
-	if reqToken == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请先配置 Bearer Token"})
-		return
-	}
-
-	filter := bson.M{}
+	filter := bson.M{"upstream_site_id": siteID}
 	if len(req.ChannelIDs) > 0 {
 		filter["channelId"] = bson.M{"$in": req.ChannelIDs}
 	}
@@ -301,7 +202,7 @@ func TestChannelAvailabilityHandler(c *gin.Context) {
 	testModel := strings.TrimSpace(req.TestModel)
 	runID := fmt.Sprintf("test-%d", time.Now().UnixNano())
 	cleanTestResults(ctx, "")
-	if err := batchTestChannels(ctx, channels, baseURL, reqToken, reqUserID, testModel, runID, config.SkipStatusCodes); err != nil {
+	if err := batchTestChannels(ctx, channels, cred.BaseURL, cred.Token, cred.UserID, testModel, runID, cred.SkipStatusCodes); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "测试结果写入失败"})
 		return
 	}
@@ -353,49 +254,14 @@ func TestSingleChannelAvailabilityHandler(c *gin.Context) {
 		return
 	}
 
-	config, err := loadChannelAvailabilityConfig(ctx)
+	cred, err := resolveCredentialsFromChannel(ctx, channel)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load config"})
-		return
-	}
-
-	reqToken := strings.TrimSpace(config.Token)
-	reqUserID := strings.TrimSpace(config.UserID)
-	if reqToken == "" {
-		importConfig, importErr := loadChannelImportConfig(ctx)
-		if importErr == nil {
-			if reqToken == "" {
-				reqToken = strings.TrimSpace(importConfig.Token)
-			}
-			if reqUserID == "" {
-				reqUserID = strings.TrimSpace(importConfig.UserID)
-			}
-		}
-	}
-
-	baseURL := ""
-	if u := strings.TrimSpace(config.URL); u != "" {
-		base, err := extractChannelAPIBaseURL(u)
-		if err == nil {
-			baseURL = base
-		}
-	}
-	if baseURL == "" {
-		importConfig, _ := loadChannelImportConfig(ctx)
-		if u := strings.TrimSpace(importConfig.URL); u != "" {
-			base, err := extractChannelAPIBaseURL(u)
-			if err == nil {
-				baseURL = base
-			}
-		}
-	}
-	if baseURL == "" || reqToken == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请先配置渠道接口地址和 Token"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	testModel := strings.TrimSpace(req.TestModel)
-	result := testOneChannel(ctx, channel, baseURL, reqToken, reqUserID, testModel, config.SkipStatusCodes)
+	result := testOneChannel(ctx, channel, cred.BaseURL, cred.Token, cred.UserID, testModel, cred.SkipStatusCodes)
 
 	now := time.Now()
 	update := bson.M{
@@ -447,7 +313,17 @@ func TestChannelModelsHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	cred, err := resolveAvailabilityCredentials(ctx)
+	var channel models.UpstreamChannel
+	if err := UpstreamChannelCol.FindOne(ctx, bson.M{"channelId": channelID}).Decode(&channel); err != nil {
+		if err == mongo.ErrNoDocuments {
+			c.JSON(http.StatusNotFound, gin.H{"error": "渠道不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询渠道失败"})
+		return
+	}
+
+	cred, err := resolveCredentialsFromChannel(ctx, channel)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -602,54 +478,6 @@ type availabilityCredentials struct {
 	SkipStatusCodes []int
 }
 
-func resolveAvailabilityCredentials(ctx context.Context) (availabilityCredentials, error) {
-	config, err := loadChannelAvailabilityConfig(ctx)
-	if err != nil {
-		return availabilityCredentials{}, fmt.Errorf("Failed to load config")
-	}
-
-	cred := availabilityCredentials{
-		Token:           strings.TrimSpace(config.Token),
-		UserID:          strings.TrimSpace(config.UserID),
-		SkipStatusCodes: config.SkipStatusCodes,
-	}
-
-	if u := strings.TrimSpace(config.URL); u != "" {
-		base, err := extractChannelAPIBaseURL(u)
-		if err == nil {
-			cred.BaseURL = base
-		}
-	}
-
-	if cred.BaseURL == "" || cred.Token == "" {
-		importConfig, importErr := loadChannelImportConfig(ctx)
-		if importErr == nil {
-			if cred.BaseURL == "" {
-				if u := strings.TrimSpace(importConfig.URL); u != "" {
-					base, err := extractChannelAPIBaseURL(u)
-					if err == nil {
-						cred.BaseURL = base
-					}
-				}
-			}
-			if cred.Token == "" {
-				cred.Token = strings.TrimSpace(importConfig.Token)
-			}
-			if cred.UserID == "" {
-				cred.UserID = strings.TrimSpace(importConfig.UserID)
-			}
-		}
-	}
-
-	if cred.BaseURL == "" {
-		return cred, fmt.Errorf("请先配置渠道接口 URL")
-	}
-	if cred.Token == "" {
-		return cred, fmt.Errorf("请先配置 Bearer Token")
-	}
-	return cred, nil
-}
-
 type channelStatusChangeResult struct {
 	ChannelID int    `json:"channelId"`
 	Name      string `json:"name"`
@@ -689,31 +517,41 @@ func DeleteUpstreamChannelsHandler(c *gin.Context) {
 }
 
 func removeChannelIDsFromNotifyConfig(ctx context.Context, idsToRemove []int) {
-	config, err := loadChannelAvailabilityNotifyConfig(ctx)
-	if err != nil || len(config.ChannelIDs) == 0 {
-		return
-	}
 	removeSet := make(map[int]struct{}, len(idsToRemove))
 	for _, id := range idsToRemove {
 		removeSet[id] = struct{}{}
 	}
-	cleaned := make([]int, 0, len(config.ChannelIDs))
-	for _, id := range config.ChannelIDs {
-		if _, ok := removeSet[id]; !ok {
-			cleaned = append(cleaned, id)
-		}
-	}
-	if len(cleaned) == len(config.ChannelIDs) {
+	cursor, err := ChannelAvailabilityNotifyCol.Find(ctx, bson.M{})
+	if err != nil {
 		return
 	}
-	opts := options.Update().SetUpsert(true)
-	ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": channelAvailabilityNotifyConfigID}, bson.M{"$set": bson.M{"channel_ids": cleaned}}, opts)
+	defer cursor.Close(ctx)
+	for cursor.Next(ctx) {
+		var config models.ChannelAvailabilityNotifyConfig
+		if err := cursor.Decode(&config); err != nil {
+			continue
+		}
+		if len(config.ChannelIDs) == 0 {
+			continue
+		}
+		cleaned := make([]int, 0, len(config.ChannelIDs))
+		for _, id := range config.ChannelIDs {
+			if _, ok := removeSet[id]; !ok {
+				cleaned = append(cleaned, id)
+			}
+		}
+		if len(cleaned) == len(config.ChannelIDs) {
+			continue
+		}
+		_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": config.ID}, bson.M{"$set": bson.M{"channel_ids": cleaned}})
+	}
 }
 
 func BatchUpdateChannelStatusHandler(c *gin.Context) {
 	var req struct {
-		ChannelIDs []int `json:"channelIds"`
-		Status     int   `json:"status"`
+		UpstreamSiteID string `json:"upstreamSiteId"`
+		ChannelIDs     []int  `json:"channelIds"`
+		Status         int    `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
@@ -727,11 +565,16 @@ func BatchUpdateChannelStatusHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "status 仅支持 1(启用) 或 2(禁用)"})
 		return
 	}
+	siteID, err := primitive.ObjectIDFromHex(strings.TrimSpace(req.UpstreamSiteID))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择上游站点"})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	cred, err := resolveAvailabilityCredentials(ctx)
+	cred, err := resolveCredentialsFromSite(ctx, siteID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -850,10 +693,21 @@ func updateOneChannelStatus(ctx context.Context, channelID int, name string, sta
 }
 
 func FetchUpstreamGroupsHandler(c *gin.Context) {
+	siteIDStr := strings.TrimSpace(c.Query("upstreamSiteId"))
+	if siteIDStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择上游站点"})
+		return
+	}
+	siteID, err := primitive.ObjectIDFromHex(siteIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的站点 ID"})
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cred, err := resolveAvailabilityCredentials(ctx)
+	cred, err := resolveCredentialsFromSite(ctx, siteID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -908,32 +762,6 @@ func fetchUpstreamGroups(ctx context.Context, groupURL, token, userID string) ([
 		payload.Data = []string{}
 	}
 	return payload.Data, nil
-}
-
-func loadChannelAvailabilityConfig(ctx context.Context) (models.ChannelAvailabilityConfig, error) {
-	config := models.ChannelAvailabilityConfig{
-		ID:     channelAvailabilityConfigID,
-		UserID: "1",
-	}
-	err := ChannelAvailabilityConfigCol.FindOne(ctx, bson.M{"_id": channelAvailabilityConfigID}).Decode(&config)
-	if err == mongo.ErrNoDocuments {
-		return config, nil
-	}
-	return config, err
-}
-
-func saveChannelAvailabilityConfig(ctx context.Context, config models.ChannelAvailabilityConfig) error {
-	now := time.Now()
-	update := bson.M{
-		"url":               strings.TrimSpace(config.URL),
-		"token":             strings.TrimSpace(config.Token),
-		"userId":            strings.TrimSpace(config.UserID),
-		"skip_status_codes": config.SkipStatusCodes,
-		"updated_at":        now,
-	}
-	opts := options.Update().SetUpsert(true)
-	_, err := ChannelAvailabilityConfigCol.UpdateOne(ctx, bson.M{"_id": channelAvailabilityConfigID}, bson.M{"$set": update}, opts)
-	return err
 }
 
 func validateChannelAvailabilityURL(rawURL string) error {
@@ -1036,8 +864,8 @@ func fetchUpstreamChannelItemPage(ctx context.Context, pageURL, token, userID st
 	return []upstreamChannelItem{}, nil
 }
 
-func saveUpstreamChannels(ctx context.Context, items []upstreamChannelItem) error {
-	existing, err := listUpstreamChannels(ctx)
+func saveUpstreamChannels(ctx context.Context, items []upstreamChannelItem, siteID primitive.ObjectID) error {
+	existing, err := listUpstreamChannels(ctx, siteID)
 	if err != nil {
 		return err
 	}
@@ -1046,7 +874,7 @@ func saveUpstreamChannels(ctx context.Context, items []upstreamChannelItem) erro
 		preserve[ch.ChannelID] = ch
 	}
 
-	if _, err := UpstreamChannelCol.DeleteMany(ctx, bson.M{}); err != nil {
+	if _, err := UpstreamChannelCol.DeleteMany(ctx, bson.M{"upstream_site_id": siteID}); err != nil {
 		return err
 	}
 	if len(items) == 0 {
@@ -1057,6 +885,7 @@ func saveUpstreamChannels(ctx context.Context, items []upstreamChannelItem) erro
 	docs := make([]interface{}, 0, len(items))
 	for _, item := range items {
 		doc := models.UpstreamChannel{
+			UpstreamSiteID: siteID,
 			ChannelID:    item.ID,
 			Type:         item.Type,
 			Status:       item.Status,
@@ -1090,10 +919,11 @@ func saveUpstreamChannels(ctx context.Context, items []upstreamChannelItem) erro
 	return err
 }
 
-func listUpstreamChannels(ctx context.Context) ([]models.UpstreamChannel, error) {
+func listUpstreamChannels(ctx context.Context, siteID primitive.ObjectID) ([]models.UpstreamChannel, error) {
+	filter := bson.M{"upstream_site_id": siteID}
 	cursor, err := UpstreamChannelCol.Find(
 		ctx,
-		bson.M{},
+		filter,
 		options.Find().SetSort(bson.D{{Key: "channelId", Value: 1}}),
 	)
 	if err != nil {
@@ -1393,12 +1223,21 @@ func isSkippedStatusCode(errMsg string, skipCodes []int) bool {
 	return false
 }
 
-const channelAvailabilityNotifyConfigID = "channel_availability_notify"
-
 func GetChannelAvailabilityNotifyConfigHandler(c *gin.Context) {
+	siteIDStr := strings.TrimSpace(c.Query("upstreamSiteId"))
+	if siteIDStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择上游站点"})
+		return
+	}
+	siteID, err := primitive.ObjectIDFromHex(siteIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的站点 ID"})
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	config, err := loadChannelAvailabilityNotifyConfig(ctx)
+	config, err := loadChannelAvailabilityNotifyConfig(ctx, siteID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load notify config"})
 		return
@@ -1407,9 +1246,27 @@ func GetChannelAvailabilityNotifyConfigHandler(c *gin.Context) {
 }
 
 func SaveChannelAvailabilityNotifyConfigHandler(c *gin.Context) {
-	var req models.ChannelAvailabilityNotifyConfig
+	var req struct {
+		UpstreamSiteID   string                       `json:"upstreamSiteId"`
+		Enabled          bool                         `json:"enabled"`
+		NotificationType string                       `json:"notificationType"`
+		WebhookURL       string                       `json:"webhookUrl"`
+		SignKey          string                       `json:"signKey"`
+		WeworkWebhookURL string                       `json:"weworkWebhookUrl"`
+		ChannelIDs       []int                        `json:"channelIds"`
+		StatusFilter     int                          `json:"statusFilter"`
+		RefreshChannels  *bool                        `json:"refreshChannels"`
+		AutoToggle       bool                         `json:"autoToggle"`
+		SlowThresholdMs  int                          `json:"slowThresholdMs"`
+		Schedules        []models.NotificationSchedule `json:"schedules"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return
+	}
+	siteID, err := primitive.ObjectIDFromHex(strings.TrimSpace(req.UpstreamSiteID))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择上游站点"})
 		return
 	}
 	if len(req.ChannelIDs) == 0 {
@@ -1425,6 +1282,7 @@ func SaveChannelAvailabilityNotifyConfigHandler(c *gin.Context) {
 	}
 	now := time.Now()
 	update := bson.M{
+		"upstream_site_id":   siteID,
 		"enabled":            req.Enabled,
 		"notification_type":  strings.TrimSpace(req.NotificationType),
 		"webhook_url":        strings.TrimSpace(req.WebhookURL),
@@ -1439,18 +1297,32 @@ func SaveChannelAvailabilityNotifyConfigHandler(c *gin.Context) {
 		"updated_at":         now,
 	}
 	opts := options.Update().SetUpsert(true)
-	if _, err := ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": channelAvailabilityNotifyConfigID}, bson.M{"$set": update}, opts); err != nil {
+	if _, err := ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"upstream_site_id": siteID}, bson.M{"$set": update}, opts); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save notify config"})
 		return
 	}
-	req.UpdatedAt = now
-	c.JSON(http.StatusOK, req)
+	config, _ := loadChannelAvailabilityNotifyConfig(ctx, siteID)
+	config.UpdatedAt = now
+	c.JSON(http.StatusOK, config)
 }
 
 func TestChannelAvailabilityNotifyHandler(c *gin.Context) {
+	var req struct {
+		UpstreamSiteID string `json:"upstreamSiteId"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
+		return
+	}
+	siteID, err := primitive.ObjectIDFromHex(strings.TrimSpace(req.UpstreamSiteID))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择上游站点"})
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	config, err := loadChannelAvailabilityNotifyConfig(ctx)
+	config, err := loadChannelAvailabilityNotifyConfig(ctx, siteID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load notify config"})
 		return
@@ -1469,9 +1341,22 @@ func TestChannelAvailabilityNotifyHandler(c *gin.Context) {
 }
 
 func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
+	var req struct {
+		UpstreamSiteID string `json:"upstreamSiteId"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
+		return
+	}
+	siteID, err := primitive.ObjectIDFromHex(strings.TrimSpace(req.UpstreamSiteID))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择上游站点"})
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	notifyConfig, err := loadChannelAvailabilityNotifyConfig(ctx)
+	notifyConfig, err := loadChannelAvailabilityNotifyConfig(ctx, siteID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load notify config"})
 		return
@@ -1485,7 +1370,7 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	cred, err := resolveAvailabilityCredentials(ctx)
+	cred, err := resolveCredentialsFromSite(ctx, siteID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -1499,13 +1384,13 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 			c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("拉取渠道失败: %s", fetchErr.Error())})
 			return
 		}
-		if err := saveUpstreamChannels(ctx, freshItems); err != nil {
+		if err := saveUpstreamChannels(ctx, freshItems, siteID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存渠道失败"})
 			return
 		}
 	}
 
-	storedChannels, err := listUpstreamChannels(ctx)
+	storedChannels, err := listUpstreamChannels(ctx, siteID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取渠道失败"})
 		return
@@ -1595,7 +1480,7 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 	cleanTestResults(ctx, runID)
 
 	nowTs := time.Now()
-	_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": channelAvailabilityNotifyConfigID}, bson.M{"$set": bson.M{"last_attempt_at": nowTs}})
+	_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"upstream_site_id": siteID}, bson.M{"$set": bson.M{"last_attempt_at": nowTs}})
 
 	failCount := len(results) - successCount
 	resp := gin.H{
@@ -1617,11 +1502,14 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-func loadChannelAvailabilityNotifyConfig(ctx context.Context) (models.ChannelAvailabilityNotifyConfig, error) {
+func loadChannelAvailabilityNotifyConfig(ctx context.Context, siteID primitive.ObjectID) (models.ChannelAvailabilityNotifyConfig, error) {
 	var config models.ChannelAvailabilityNotifyConfig
-	err := ChannelAvailabilityNotifyCol.FindOne(ctx, bson.M{"_id": channelAvailabilityNotifyConfigID}).Decode(&config)
+	err := ChannelAvailabilityNotifyCol.FindOne(ctx, bson.M{"upstream_site_id": siteID}).Decode(&config)
 	if err == mongo.ErrNoDocuments {
-		return models.ChannelAvailabilityNotifyConfig{NotificationType: "feishu"}, nil
+		return models.ChannelAvailabilityNotifyConfig{
+			UpstreamSiteID:   siteID,
+			NotificationType: "feishu",
+		}, nil
 	}
 	return config, err
 }
@@ -1792,14 +1680,28 @@ func StartChannelAvailabilityScheduler() {
 }
 
 func runScheduledChannelAvailabilityNotify() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	config, err := loadChannelAvailabilityNotifyConfig(ctx)
-	if err != nil || !config.Enabled || len(config.ChannelIDs) == 0 || len(config.Schedules) == 0 {
+	cursor, err := ChannelAvailabilityNotifyCol.Find(ctx, bson.M{"enabled": true})
+	if err != nil {
 		return
 	}
+	defer cursor.Close(ctx)
 
+	for cursor.Next(ctx) {
+		var config models.ChannelAvailabilityNotifyConfig
+		if err := cursor.Decode(&config); err != nil {
+			continue
+		}
+		if len(config.ChannelIDs) == 0 || len(config.Schedules) == 0 || config.UpstreamSiteID.IsZero() {
+			continue
+		}
+		runScheduledNotifyForSite(ctx, config)
+	}
+}
+
+func runScheduledNotifyForSite(ctx context.Context, config models.ChannelAvailabilityNotifyConfig) {
 	now := time.Now()
 	schedule, scheduleStart, ok := activeNotificationSchedule(config.Schedules, now)
 	if !ok {
@@ -1814,11 +1716,12 @@ func runScheduledChannelAvailabilityNotify() {
 		}
 	}
 
+	siteID := config.UpstreamSiteID
 	nType, webhookURL, signKey, resolveErr := resolveNotifyWebhook(ctx, config)
 	if resolveErr != nil {
 		return
 	}
-	cred, credErr := resolveAvailabilityCredentials(ctx)
+	cred, credErr := resolveCredentialsFromSite(ctx, siteID)
 	if credErr != nil {
 		return
 	}
@@ -1828,16 +1731,16 @@ func runScheduledChannelAvailabilityNotify() {
 		channelURL := cred.BaseURL + "/api/channel/"
 		freshItems, fetchErr := fetchAllUpstreamChannelItems(ctx, channelURL, cred.Token, cred.UserID)
 		if fetchErr != nil {
-			log.Printf("[channel-availability-scheduler] fetch channels error: %v", fetchErr)
+			log.Printf("[channel-availability-scheduler] site %s fetch channels error: %v", siteID.Hex(), fetchErr)
 			return
 		}
-		if err := saveUpstreamChannels(ctx, freshItems); err != nil {
-			log.Printf("[channel-availability-scheduler] save channels error: %v", err)
+		if err := saveUpstreamChannels(ctx, freshItems, siteID); err != nil {
+			log.Printf("[channel-availability-scheduler] site %s save channels error: %v", siteID.Hex(), err)
 			return
 		}
 	}
 
-	storedChannels, err := listUpstreamChannels(ctx)
+	storedChannels, err := listUpstreamChannels(ctx, siteID)
 	if err != nil {
 		return
 	}
@@ -1855,19 +1758,19 @@ func runScheduledChannelAvailabilityNotify() {
 		}
 	}
 
-	filter := bson.M{"channelId": bson.M{"$in": validIDs}}
+	filter := bson.M{"channelId": bson.M{"$in": validIDs}, "upstream_site_id": siteID}
 	if config.StatusFilter == 1 {
 		filter["status"] = 1
 	} else if config.StatusFilter == 2 {
 		filter["status"] = 2
 	}
-	cursor, err := UpstreamChannelCol.Find(ctx, filter)
+	channelCursor, err := UpstreamChannelCol.Find(ctx, filter)
 	if err != nil {
 		return
 	}
-	defer cursor.Close(ctx)
+	defer channelCursor.Close(ctx)
 	var targetChannels []models.UpstreamChannel
-	if err := cursor.All(ctx, &targetChannels); err != nil {
+	if err := channelCursor.All(ctx, &targetChannels); err != nil {
 		return
 	}
 	if len(targetChannels) == 0 {
@@ -1877,13 +1780,13 @@ func runScheduledChannelAvailabilityNotify() {
 	runID := fmt.Sprintf("sched-%d", time.Now().UnixNano())
 	cleanTestResults(ctx, "")
 	if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, cred.SkipStatusCodes); err != nil {
-		log.Printf("[channel-availability-scheduler] write test results error: %v", err)
+		log.Printf("[channel-availability-scheduler] site %s write test results error: %v", siteID.Hex(), err)
 		return
 	}
 
 	classified, err := classifyTestResults(ctx, runID, config.SlowThresholdMs)
 	if err != nil {
-		log.Printf("[channel-availability-scheduler] classify test results error: %v", err)
+		log.Printf("[channel-availability-scheduler] site %s classify test results error: %v", siteID.Hex(), err)
 		return
 	}
 
@@ -1903,12 +1806,12 @@ func runScheduledChannelAvailabilityNotify() {
 	if len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0 {
 		msg := buildAvailabilityNotifyMessage(classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, config.AutoToggle, config.SlowThresholdMs, toggleResults)
 		if err := sendAvailabilityNotification(ctx, nType, webhookURL, signKey, msg); err != nil {
-			log.Printf("[channel-availability-scheduler] send notification error: %v", err)
+			log.Printf("[channel-availability-scheduler] site %s send notification error: %v", siteID.Hex(), err)
 		}
 	}
 
 	cleanTestResults(ctx, runID)
 
 	nowTs := time.Now()
-	_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": channelAvailabilityNotifyConfigID}, bson.M{"$set": bson.M{"last_attempt_at": nowTs}})
+	_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": config.ID}, bson.M{"$set": bson.M{"last_attempt_at": nowTs}})
 }

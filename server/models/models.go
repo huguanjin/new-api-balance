@@ -66,12 +66,15 @@ type NotificationSchedule struct {
 	IntervalMinutes int    `bson:"interval_minutes" json:"interval_minutes"`
 }
 
-type ChannelImportConfig struct {
-	ID        string    `bson:"_id,omitempty" json:"-"`
-	URL       string    `bson:"url" json:"url"`
-	Token     string    `bson:"token" json:"token"`
-	UserID    string    `bson:"userId" json:"userId"`
-	UpdatedAt time.Time `bson:"updated_at" json:"updated_at"`
+type UpstreamSite struct {
+	ID              primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Name            string             `bson:"name" json:"name"`
+	URL             string             `bson:"url" json:"url"`
+	Token           string             `bson:"token" json:"token"`
+	UserID          string             `bson:"userId" json:"userId"`
+	SkipStatusCodes []int              `bson:"skip_status_codes,omitempty" json:"skipStatusCodes,omitempty"`
+	CreatedAt       time.Time          `bson:"created_at" json:"createdAt"`
+	UpdatedAt       time.Time          `bson:"updated_at" json:"updatedAt"`
 }
 
 type ModelDetectionNotificationConfig struct {
@@ -96,7 +99,8 @@ type ModelDetectionNotificationConfig struct {
 }
 
 type ChannelAvailabilityNotifyConfig struct {
-	ID               string                 `bson:"_id,omitempty" json:"-"`
+	ID               primitive.ObjectID     `bson:"_id,omitempty" json:"id"`
+	UpstreamSiteID   primitive.ObjectID     `bson:"upstream_site_id" json:"upstreamSiteId"`
 	Enabled          bool                   `bson:"enabled" json:"enabled"`
 	NotificationType string                 `bson:"notification_type" json:"notificationType"`
 	WebhookURL       string                 `bson:"webhook_url" json:"webhookUrl"`
@@ -112,18 +116,10 @@ type ChannelAvailabilityNotifyConfig struct {
 	UpdatedAt        time.Time              `bson:"updated_at" json:"updatedAt"`
 }
 
-type ChannelAvailabilityConfig struct {
-	ID              string    `bson:"_id,omitempty" json:"-"`
-	URL             string    `bson:"url" json:"url"`
-	Token           string    `bson:"token" json:"token"`
-	UserID          string    `bson:"userId" json:"userId"`
-	SkipStatusCodes []int     `bson:"skip_status_codes,omitempty" json:"skipStatusCodes,omitempty"`
-	UpdatedAt       time.Time `bson:"updated_at" json:"updated_at"`
-}
-
 type UpstreamChannel struct {
-	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	ChannelID      int                `bson:"channelId" json:"channelId"`
+	ID               primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	UpstreamSiteID   primitive.ObjectID `bson:"upstream_site_id" json:"upstreamSiteId"`
+	ChannelID        int                `bson:"channelId" json:"channelId"`
 	Type           int                `bson:"type" json:"type"`
 	Status         int                `bson:"status" json:"status"`
 	Name           string             `bson:"name" json:"name"`

@@ -22,10 +22,9 @@ var (
 	UserCol                 *mongo.Collection
 	SiteCol                 *mongo.Collection
 	NotificationConfigCol   *mongo.Collection
-	ChannelImportConfigCol  *mongo.Collection
+	UpstreamSiteCol              *mongo.Collection
 	ModelDetectionConfigCol      *mongo.Collection
 	ModelDetectionJobCol         *mongo.Collection
-	ChannelAvailabilityConfigCol  *mongo.Collection
 	ChannelAvailabilityNotifyCol *mongo.Collection
 	UpstreamChannelCol           *mongo.Collection
 	ChannelTestResultCol         *mongo.Collection
@@ -65,14 +64,17 @@ func InitDB() error {
 	UserCol = db.Collection("users")
 	SiteCol = db.Collection("sites")
 	NotificationConfigCol = db.Collection("notification_configs")
-	ChannelImportConfigCol = db.Collection("channel_import_configs")
+	UpstreamSiteCol = db.Collection("upstream_sites")
 	ModelDetectionConfigCol = db.Collection("model_detection_configs")
 	ModelDetectionJobCol = db.Collection("model_detection_jobs")
-	ChannelAvailabilityConfigCol = db.Collection("channel_availability_configs")
 	ChannelAvailabilityNotifyCol = db.Collection("channel_availability_notify_configs")
 	UpstreamChannelCol = db.Collection("upstream_channels")
 	ChannelTestResultCol = db.Collection("channel_test_results")
 	CodexConfigCol = db.Collection("codex_configs")
+
+	if err := migrateToUpstreamSites(ctx); err != nil {
+		return fmt.Errorf("upstream sites migration failed: %w", err)
+	}
 
 	// Ensure admin exists
 	err = ensureAdminExists()

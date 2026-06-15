@@ -4,6 +4,7 @@ import Balance from '../views/Balance.vue'
 import MainLayout from '../views/MainLayout.vue'
 import ModelDetection from '../views/ModelDetection.vue'
 import ChannelAvailability from '../views/ChannelAvailability.vue'
+import UpstreamSites from '../views/UpstreamSites.vue'
 import CodexBalance from '../views/CodexBalance.vue'
 
 const routes = [
@@ -35,6 +36,11 @@ const routes = [
         path: 'channel-availability',
         name: 'ChannelAvailability',
         component: ChannelAvailability
+      },
+      {
+        path: 'upstream-sites',
+        name: 'UpstreamSites',
+        component: UpstreamSites
       },
       {
         path: 'codex-balance',

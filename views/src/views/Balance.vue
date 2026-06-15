@@ -96,39 +96,27 @@
       </template>
     </el-dialog>
 
-    <el-dialog title="从上游导入渠道" v-model="importDialogVisible" width="680px">
+    <el-dialog title="从上游导入渠道" v-model="importDialogVisible" width="520px">
       <el-alert
         class="import-alert"
         type="warning"
         :closable="false"
         title="导入会覆盖当前站点列表；地址重复时优先保留启用渠道，同状态保留上游返回中的最后一条。已有相同地址的 Token 和 User ID 会自动保留。"
       />
-      <el-form :model="importForm" label-width="130px" v-loading="importConfigLoading">
-        <el-form-item label="渠道接口 URL">
-          <el-input
-            v-model="importForm.url"
-            type="textarea"
-            :rows="3"
-            placeholder="https://example.com/api/channel/?p=1&page_size=100&id_sort=false&tag_mode=false&status=enabled"
-          />
+      <el-form label-width="100px" v-loading="importConfigLoading">
+        <el-form-item label="上游站点">
+          <el-select v-model="importSiteId" placeholder="请选择上游站点" style="width: 100%">
+            <el-option v-for="s in importSiteList" :key="s.id" :label="s.name" :value="s.id" />
+          </el-select>
         </el-form-item>
-        <el-form-item label="Bearer Token">
-          <el-input
-            v-model="importForm.token"
-            type="password"
-            show-password
-            placeholder="上游站点管理员 Token"
-          />
-        </el-form-item>
-        <el-form-item label="new-api-user">
-          <el-input v-model="importForm.userId" placeholder="如 1" />
+        <el-form-item>
+          <el-button text type="primary" @click="$router.push('/upstream-sites')">管理站点</el-button>
         </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
           <el-button @click="importDialogVisible = false">取消</el-button>
-          <el-button @click="saveImportConfig" :loading="savingImportConfig">保存配置</el-button>
-          <el-button type="primary" @click="importChannels" :loading="importing">开始导入</el-button>
+          <el-button type="primary" @click="importChannels" :loading="importing" :disabled="!importSiteId">开始导入</el-button>
         </span>
       </template>
     </el-dialog>
@@ -271,7 +259,6 @@ const refreshingSiteKeys = ref(new Set())
 const notifying = ref(false)
 const importing = ref(false)
 const importConfigLoading = ref(false)
-const savingImportConfig = ref(false)
 const statusFilter = ref('all')
 const defaultRedBalanceThreshold = 100
 const defaultYellowBalanceThreshold = 500
@@ -282,11 +269,8 @@ const editIndex = ref(-1)
 const currentSite = ref({ channelId: 0, status: 0, name: '', url: '', adapter: '', token: '', userId: '' })
 
 const importDialogVisible = ref(false)
-const importForm = ref({
-  url: '',
-  token: '',
-  userId: '1'
-})
+const importSiteId = ref('')
+const importSiteList = ref([])
 
 const defaultNotificationConfig = () => ({
   enabled: false,
@@ -406,68 +390,25 @@ const syncToServer = async () => {
 const openImportDialog = async () => {
   importDialogVisible.value = true
   importConfigLoading.value = true
+  importSiteId.value = ''
   try {
-    const res = await axios.get('/api/channels/import-config', {
-      headers: authHeaders()
-    })
-    importForm.value = {
-      url: res.data?.url || '',
-      token: res.data?.token || '',
-      userId: res.data?.userId || '1'
+    const res = await axios.get('/api/upstream-sites', { headers: authHeaders() })
+    importSiteList.value = res.data || []
+    if (importSiteList.value.length === 1) {
+      importSiteId.value = importSiteList.value[0].id
     }
-  } catch (err) {
-    ElMessage.error(err.response?.data?.error || '无法获取导入配置')
+  } catch {
+    ElMessage.error('加载站点列表失败')
   } finally {
     importConfigLoading.value = false
   }
 }
 
-const importPayload = () => ({
-  url: importForm.value.url.trim(),
-  token: importForm.value.token.trim(),
-  userId: importForm.value.userId.trim()
-})
-
-const validateImportForm = () => {
-  const url = importForm.value.url.trim()
-  const token = importForm.value.token.trim()
-  if (!url) {
-    ElMessage.error('请填写渠道接口 URL')
-    return false
-  }
-  if (!token) {
-    ElMessage.error('请填写 Bearer Token')
-    return false
-  }
-  return true
-}
-
-const saveImportConfig = async () => {
-  if (!validateImportForm()) return false
-
-  savingImportConfig.value = true
-  try {
-    const res = await axios.put('/api/channels/import-config', importPayload(), {
-      headers: authHeaders()
-    })
-    importForm.value = {
-      url: res.data?.url || '',
-      token: res.data?.token || '',
-      userId: res.data?.userId || '1'
-    }
-    ElMessage.success('导入配置已保存')
-    return true
-  } catch (err) {
-    const status = err.response?.status
-    ElMessage.error(err.response?.data?.error || (status ? `导入配置保存失败（HTTP ${status}）` : '导入配置保存失败'))
-    return false
-  } finally {
-    savingImportConfig.value = false
-  }
-}
-
 const importChannels = async () => {
-  if (!validateImportForm()) return
+  if (!importSiteId.value) {
+    ElMessage.warning('请选择上游站点')
+    return
+  }
 
   try {
     await ElMessageBox.confirm(
@@ -481,7 +422,9 @@ const importChannels = async () => {
 
   importing.value = true
   try {
-    const res = await axios.post('/api/channels/import', importPayload(), {
+    const res = await axios.post('/api/channels/import', {
+      upstreamSiteId: importSiteId.value
+    }, {
       headers: authHeaders()
     })
     await fetchSites()

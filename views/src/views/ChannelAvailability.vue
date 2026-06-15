@@ -1,15 +1,20 @@
 <template>
   <div class="channel-availability-container">
     <div class="header">
-      <h2>上游渠道可用性检测</h2>
+      <div class="header-left">
+        <h2>上游渠道可用性检测</h2>
+        <el-select v-model="selectedSiteId" placeholder="请选择上游站点" style="width: 220px" @change="onSiteChange">
+          <el-option v-for="s in siteList" :key="s.id" :label="s.name" :value="s.id" />
+        </el-select>
+        <el-button text type="primary" @click="$router.push('/upstream-sites')">管理站点</el-button>
+      </div>
       <div class="actions">
-        <el-button type="primary" @click="fetchChannels" :loading="fetching">获取渠道列表</el-button>
+        <el-button type="primary" @click="fetchChannels" :loading="fetching" :disabled="!selectedSiteId">获取渠道列表</el-button>
         <el-button type="success" @click="openBatchTestDialog" :disabled="!selectedChannels.length">批量测试 ({{ selectedChannels.length }})</el-button>
         <el-button type="warning" @click="batchEnableChannels" :loading="batchEnabling" :disabled="!selectedChannels.length">批量启用</el-button>
         <el-button type="danger" @click="batchDisableChannels" :loading="batchDisabling" :disabled="!selectedChannels.length">批量禁用</el-button>
         <el-button type="danger" plain @click="batchDeleteChannels" :loading="batchDeleting" :disabled="!selectedChannels.length">批量删除</el-button>
-        <el-button @click="openConfigDialog">鉴权配置</el-button>
-        <el-button type="info" @click="openNotifyConfigDialog">推送配置</el-button>
+        <el-button type="info" @click="openNotifyConfigDialog" :disabled="!selectedSiteId">推送配置</el-button>
       </div>
     </div>
 
@@ -260,55 +265,6 @@
       </template>
     </el-dialog>
 
-    <!-- 鉴权配置弹窗 -->
-    <el-dialog title="鉴权配置" v-model="configDialogVisible" width="560px">
-      <el-alert
-        class="config-alert"
-        type="info"
-        :closable="false"
-        title="留空则自动使用余额管理中的上游渠道导入配置"
-      />
-      <el-form :model="configForm" label-width="130px" v-loading="configLoading">
-        <el-form-item label="渠道接口 URL">
-          <el-input
-            v-model="configForm.url"
-            placeholder="https://example.com/api/channel/"
-          />
-        </el-form-item>
-        <el-form-item label="Bearer Token">
-          <el-input
-            v-model="configForm.token"
-            type="password"
-            show-password
-            placeholder="上游站点管理员 Token"
-          />
-        </el-form-item>
-        <el-form-item label="New-Api-User">
-          <el-input v-model="configForm.userId" placeholder="如 1" />
-        </el-form-item>
-        <el-form-item label="过滤状态码">
-          <el-select
-            v-model="configForm.skipStatusCodes"
-            multiple
-            filterable
-            allow-create
-            default-first-option
-            placeholder="如 429、502 等"
-            style="width: 100%"
-          >
-            <el-option v-for="code in commonStatusCodes" :key="code.value" :label="code.label" :value="code.value" />
-          </el-select>
-          <div class="form-tip">测试返回包含这些状态码的错误时视为通过，不触发停用；留空则按默认规则判定</div>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="configDialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="saveConfig" :loading="savingConfig">保存</el-button>
-        </span>
-      </template>
-    </el-dialog>
-
     <!-- 推送配置弹窗 -->
     <el-dialog title="推送配置" v-model="notifyConfigDialogVisible" width="620px" :close-on-click-modal="false">
       <el-alert
@@ -467,16 +423,8 @@ const searchText = ref('')
 const groups = ref([])
 const tableRef = ref(null)
 
-const configDialogVisible = ref(false)
-const configLoading = ref(false)
-const savingConfig = ref(false)
-const configForm = ref({ url: '', token: '', userId: '1', skipStatusCodes: [] })
-const commonStatusCodes = [
-  { label: '429 Too Many Requests', value: 429 },
-  { label: '502 Bad Gateway', value: 502 },
-  { label: '503 Service Unavailable', value: 503 },
-  { label: '504 Gateway Timeout', value: 504 },
-]
+const siteList = ref([])
+const selectedSiteId = ref('')
 
 const modelTestDialogVisible = ref(false)
 const modelTestChannelId = ref(0)
@@ -600,9 +548,11 @@ const handleModelSelectionChange = (selection) => {
 }
 
 const fetchGroups = async () => {
+  if (!selectedSiteId.value) return
   try {
     const res = await axios.get('/api/channel-availability/groups', {
-      headers: authHeaders()
+      headers: authHeaders(),
+      params: { upstreamSiteId: selectedSiteId.value }
     })
     groups.value = res.data?.groups || []
   } catch {
@@ -611,10 +561,15 @@ const fetchGroups = async () => {
 }
 
 const loadChannels = async () => {
+  if (!selectedSiteId.value) {
+    channels.value = []
+    return
+  }
   loading.value = true
   try {
     const res = await axios.get('/api/channel-availability/channels', {
-      headers: authHeaders()
+      headers: authHeaders(),
+      params: { upstreamSiteId: selectedSiteId.value }
     })
     channels.value = res.data || []
   } catch (err) {
@@ -629,7 +584,9 @@ const loadChannels = async () => {
 const fetchChannels = async () => {
   fetching.value = true
   try {
-    const res = await axios.post('/api/channel-availability/fetch', {}, {
+    const res = await axios.post('/api/channel-availability/fetch', {
+      upstreamSiteId: selectedSiteId.value
+    }, {
       headers: authHeaders()
     })
     channels.value = res.data?.channels || []
@@ -659,6 +616,7 @@ const confirmBatchTest = async () => {
   const ids = selectedChannels.value.map(ch => ch.channelId)
   try {
     const res = await axios.post('/api/channel-availability/test', {
+      upstreamSiteId: selectedSiteId.value,
       channelIds: ids,
       testModel: batchTestModel.value || ''
     }, {
@@ -731,6 +689,7 @@ const batchUpdateStatus = async (status) => {
   const ids = selectedChannels.value.map(ch => ch.channelId)
   try {
     const res = await axios.post('/api/channel-availability/batch-status', {
+      upstreamSiteId: selectedSiteId.value,
       channelIds: ids,
       status
     }, {
@@ -923,7 +882,8 @@ const openNotifyConfigDialog = async () => {
   notifyShowSelectedOnly.value = false
   try {
     const res = await axios.get('/api/channel-availability/notify-config', {
-      headers: authHeaders()
+      headers: authHeaders(),
+      params: { upstreamSiteId: selectedSiteId.value }
     })
     notifyForm.value = {
       enabled: res.data?.enabled || false,
@@ -1002,6 +962,7 @@ const saveNotifyConfig = async () => {
   }
   savingNotify.value = true
   const payload = {
+    upstreamSiteId: selectedSiteId.value,
     ...notifyForm.value,
     schedules: (notifyForm.value.schedules || []).map(s => ({
       start_time: s.startTime || s.startTimeObj || '',
@@ -1024,7 +985,9 @@ const saveNotifyConfig = async () => {
 const testNotifyPush = async () => {
   testingNotify.value = true
   try {
-    const res = await axios.post('/api/channel-availability/notify-test', {}, {
+    const res = await axios.post('/api/channel-availability/notify-test', {
+      upstreamSiteId: selectedSiteId.value
+    }, {
       headers: authHeaders()
     })
     ElMessage.success(res.data?.message || '测试推送成功')
@@ -1050,7 +1013,9 @@ const runNotifyPush = async () => {
 
   runningNotify.value = true
   try {
-    const res = await axios.post('/api/channel-availability/notify-run', {}, {
+    const res = await axios.post('/api/channel-availability/notify-run', {
+      upstreamSiteId: selectedSiteId.value
+    }, {
       headers: authHeaders()
     })
     const data = res.data || {}
@@ -1123,44 +1088,24 @@ const setChannelTesting = (channelId, value) => {
   testingChannelIds.value = next
 }
 
-const openConfigDialog = async () => {
-  configDialogVisible.value = true
-  configLoading.value = true
+const loadSites = async () => {
   try {
-    const res = await axios.get('/api/channel-availability/config', {
-      headers: authHeaders()
-    })
-    configForm.value = {
-      url: res.data?.url || '',
-      token: res.data?.token || '',
-      userId: res.data?.userId || '1',
-      skipStatusCodes: res.data?.skipStatusCodes || []
+    const res = await axios.get('/api/upstream-sites', { headers: authHeaders() })
+    siteList.value = res.data || []
+    if (siteList.value.length && !selectedSiteId.value) {
+      selectedSiteId.value = siteList.value[0].id
     }
-  } catch (err) {
-    ElMessage.error('获取配置失败')
-  } finally {
-    configLoading.value = false
+  } catch {
+    // ignore
   }
 }
 
-const saveConfig = async () => {
-  savingConfig.value = true
-  try {
-    await axios.put('/api/channel-availability/config', {
-      url: configForm.value.url.trim(),
-      token: configForm.value.token.trim(),
-      userId: configForm.value.userId.trim(),
-      skipStatusCodes: (configForm.value.skipStatusCodes || []).map(Number).filter(n => n > 0)
-    }, {
-      headers: authHeaders()
-    })
-    ElMessage.success('配置已保存')
-    configDialogVisible.value = false
-  } catch (err) {
-    ElMessage.error(err.response?.data?.error || '保存配置失败')
-  } finally {
-    savingConfig.value = false
-  }
+const onSiteChange = () => {
+  channels.value = []
+  selectedChannels.value = []
+  groups.value = []
+  loadChannels()
+  fetchGroups()
 }
 
 const logout = () => {
@@ -1168,9 +1113,12 @@ const logout = () => {
   window.location.href = '/login'
 }
 
-onMounted(() => {
-  loadChannels()
-  fetchGroups()
+onMounted(async () => {
+  await loadSites()
+  if (selectedSiteId.value) {
+    loadChannels()
+    fetchGroups()
+  }
 })
 </script>
 
@@ -1185,6 +1133,18 @@ onMounted(() => {
   align-items: center;
   gap: 16px;
   margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-left h2 {
+  margin: 0;
+  white-space: nowrap;
 }
 
 .actions {

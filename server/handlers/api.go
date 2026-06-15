@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,13 +19,12 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"golang.org/x/crypto/bcrypt"
 )
 
 var jwtKey = []byte("your_secret_key_change_me_in_production")
 
-const channelImportConfigID = "default_channel_import"
+const channelImportConfigID = "default_channel_import" // kept for migration only
 
 type Claims struct {
 	Username string `json:"username"`
@@ -44,9 +42,7 @@ type ChangePasswordRequest struct {
 }
 
 type ImportChannelsRequest struct {
-	URL    string `json:"url" binding:"required"`
-	Token  string `json:"token" binding:"required"`
-	UserID string `json:"userId"`
+	UpstreamSiteID string `json:"upstreamSiteId" binding:"required"`
 }
 
 type QueryBalanceRequest struct {
@@ -302,74 +298,37 @@ func QueryBalanceHandler(c *gin.Context) {
 	})
 }
 
-func GetChannelImportConfigHandler(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	config, err := loadChannelImportConfig(ctx)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load channel import config"})
-		return
-	}
-
-	c.JSON(http.StatusOK, config)
-}
-
-func SaveChannelImportConfigHandler(c *gin.Context) {
-	var req ImportChannelsRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
-		return
-	}
-
-	config := models.ChannelImportConfig{
-		URL:    strings.TrimSpace(req.URL),
-		Token:  strings.TrimSpace(req.Token),
-		UserID: strings.TrimSpace(req.UserID),
-	}
-	if err := validateChannelImportConfig(config); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := saveChannelImportConfig(ctx, config); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save channel import config: " + err.Error()})
-		return
-	}
-
-	config.ID = channelImportConfigID
-	config.UpdatedAt = time.Now()
-	c.JSON(http.StatusOK, config)
-}
-
 func ImportChannelsHandler(c *gin.Context) {
 	var req ImportChannelsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择上游站点"})
 		return
 	}
 
-	config := models.ChannelImportConfig{
-		URL:    strings.TrimSpace(req.URL),
-		Token:  strings.TrimSpace(req.Token),
-		UserID: strings.TrimSpace(req.UserID),
-	}
-	if err := validateChannelImportConfig(config); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	siteID, err := primitive.ObjectIDFromHex(strings.TrimSpace(req.UpstreamSiteID))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的站点 ID"})
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := saveChannelImportConfig(ctx, config); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save channel import config: " + err.Error()})
+	site, err := loadUpstreamSite(ctx, siteID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "上游站点不存在"})
 		return
 	}
 
-	channels, err := fetchUpstreamChannels(ctx, config.URL, config.Token, config.UserID)
+	siteURL := strings.TrimSpace(site.URL)
+	siteToken := strings.TrimSpace(site.Token)
+	siteUserID := strings.TrimSpace(site.UserID)
+	if siteURL == "" || siteToken == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "站点 URL 或 Token 未配置"})
+		return
+	}
+
+	channels, err := fetchUpstreamChannels(ctx, siteURL, siteToken, siteUserID)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
@@ -394,49 +353,6 @@ func ImportChannelsHandler(c *gin.Context) {
 		"duplicate_url_count": importResult.DuplicateURLCount,
 		"invalid_url_count":   importResult.InvalidURLCount,
 	})
-}
-
-func loadChannelImportConfig(ctx context.Context) (models.ChannelImportConfig, error) {
-	config := models.ChannelImportConfig{
-		ID:     channelImportConfigID,
-		UserID: "1",
-	}
-	err := ChannelImportConfigCol.FindOne(ctx, bson.M{"_id": channelImportConfigID}).Decode(&config)
-	if err == mongo.ErrNoDocuments {
-		return config, nil
-	}
-	if err != nil {
-		return config, err
-	}
-	return config, nil
-}
-
-func saveChannelImportConfig(ctx context.Context, config models.ChannelImportConfig) error {
-	now := time.Now()
-	update := bson.M{
-		"url":        strings.TrimSpace(config.URL),
-		"token":      strings.TrimSpace(config.Token),
-		"userId":     strings.TrimSpace(config.UserID),
-		"updated_at": now,
-	}
-	opts := options.Update().SetUpsert(true)
-	_, err := ChannelImportConfigCol.UpdateOne(ctx, bson.M{"_id": channelImportConfigID}, bson.M{"$set": update}, opts)
-	return err
-}
-
-func validateChannelImportConfig(config models.ChannelImportConfig) error {
-	if strings.TrimSpace(config.URL) == "" {
-		return errors.New("请填写上游渠道接口 URL")
-	}
-	if strings.TrimSpace(config.Token) == "" {
-		return errors.New("请填写 Bearer Token")
-	}
-
-	parsed, err := url.Parse(strings.TrimSpace(config.URL))
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return errors.New("上游渠道接口 URL 必须是完整的 http:// 或 https:// 地址")
-	}
-	return nil
 }
 
 func fetchUpstreamChannels(ctx context.Context, channelURL, token, userID string) ([]upstreamChannel, error) {
