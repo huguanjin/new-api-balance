@@ -25,6 +25,10 @@
           <el-icon><Connection /></el-icon>
           <span>渠道可用性</span>
         </el-menu-item>
+        <el-menu-item index="/codex-balance">
+          <el-icon><Cpu /></el-icon>
+          <span>Codex 号池</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -51,6 +55,13 @@
             @click="router.push('/channel-availability')"
           >
             渠道可用性
+          </el-button>
+          <el-button
+            :type="route.path === '/codex-balance' ? 'primary' : 'default'"
+            :icon="Cpu"
+            @click="router.push('/codex-balance')"
+          >
+            Codex
           </el-button>
         </div>
         <div class="header-title">
@@ -91,7 +102,7 @@
 <script setup>
 import { computed, ref, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Coin, Monitor, Connection, SwitchButton, Lock } from '@element-plus/icons-vue'
+import { Coin, Monitor, Connection, Cpu, SwitchButton, Lock } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 
@@ -101,6 +112,7 @@ const router = useRouter()
 const pageMeta = {
   '/model-detection': { title: '模型真实性检测', description: '配置检测模型、提交 Veridrop 任务并跟踪报告' },
   '/channel-availability': { title: '上游渠道可用性检测', description: '获取上游渠道列表，批量检测渠道可用性' },
+  '/codex-balance': { title: 'Codex 号池余额', description: '查询 Codex 号池各账号配额使用情况' },
 }
 
 const pageTitle = computed(() => pageMeta[route.path]?.title || '余额管理')

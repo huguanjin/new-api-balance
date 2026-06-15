@@ -169,6 +169,14 @@ type ChannelTestResult struct {
 	TestedAt     time.Time                `bson:"tested_at" json:"testedAt"`
 }
 
+type CodexConfig struct {
+	ID         string    `bson:"_id,omitempty" json:"-"`
+	BaseURL    string    `bson:"base_url" json:"baseUrl"`
+	AdminToken string    `bson:"admin_token" json:"adminToken"`
+	Timeout    int       `bson:"timeout" json:"timeout"`
+	UpdatedAt  time.Time `bson:"updated_at" json:"updatedAt"`
+}
+
 type ModelDetectionJob struct {
 	ID             primitive.ObjectID     `bson:"_id,omitempty" json:"id"`
 	SiteID         primitive.ObjectID     `bson:"site_id" json:"siteId"`

@@ -4,6 +4,7 @@ import Balance from '../views/Balance.vue'
 import MainLayout from '../views/MainLayout.vue'
 import ModelDetection from '../views/ModelDetection.vue'
 import ChannelAvailability from '../views/ChannelAvailability.vue'
+import CodexBalance from '../views/CodexBalance.vue'
 
 const routes = [
   {
@@ -34,6 +35,11 @@ const routes = [
         path: 'channel-availability',
         name: 'ChannelAvailability',
         component: ChannelAvailability
+      },
+      {
+        path: 'codex-balance',
+        name: 'CodexBalance',
+        component: CodexBalance
       }
     ]
   }
