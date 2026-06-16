@@ -432,6 +432,7 @@
       <template #footer>
         <span class="dialog-footer">
           <el-button @click="globalNotifyConfigDialogVisible = false">取消</el-button>
+          <el-button @click="testGlobalNotifyPush" :loading="testingGlobalNotify">测试推送</el-button>
           <el-button type="primary" @click="saveGlobalNotifyConfig" :loading="savingGlobalNotify">保存</el-button>
         </span>
       </template>
@@ -509,6 +510,7 @@ const notifyShowSelectedOnly = ref(false)
 const globalNotifyConfigDialogVisible = ref(false)
 const globalNotifyConfigLoading = ref(false)
 const savingGlobalNotify = ref(false)
+const testingGlobalNotify = ref(false)
 const globalNotifyForm = ref({
   notificationType: 'feishu',
   webhookUrl: '',
@@ -1162,6 +1164,20 @@ const saveGlobalNotifyConfig = async () => {
     ElMessage.error(err.response?.data?.error || '保存全局推送配置失败')
   } finally {
     savingGlobalNotify.value = false
+  }
+}
+
+const testGlobalNotifyPush = async () => {
+  testingGlobalNotify.value = true
+  try {
+    const res = await axios.post('/api/channel-availability/global-notify-test', {}, {
+      headers: authHeaders()
+    })
+    ElMessage.success(res.data?.message || '测试推送成功')
+  } catch (err) {
+    ElMessage.error(err.response?.data?.error || '测试推送失败')
+  } finally {
+    testingGlobalNotify.value = false
   }
 }
 

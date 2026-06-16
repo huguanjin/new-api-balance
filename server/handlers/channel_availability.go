@@ -1409,6 +1409,37 @@ func TestChannelAvailabilityNotifyHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "测试推送成功"})
 }
 
+func TestChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	globalConfig, found, err := loadChannelAvailabilityGlobalNotifyConfig(ctx)
+	if err != nil || !found {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "未配置全局推送机器人"})
+		return
+	}
+	nType := globalConfig.NotificationType
+	if nType == "" {
+		nType = "feishu"
+	}
+	var webhookURL, signKey string
+	if nType == "feishu" {
+		webhookURL = strings.TrimSpace(globalConfig.WebhookURL)
+		signKey = strings.TrimSpace(globalConfig.SignKey)
+	} else {
+		webhookURL = strings.TrimSpace(globalConfig.WeworkWebhookURL)
+	}
+	if webhookURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "全局推送机器人 Webhook URL 未配置"})
+		return
+	}
+	msg := "【渠道可用性推送测试 - 全局配置】\n这是一条测试消息，收到此消息说明全局推送配置正常。"
+	if err := sendAvailabilityNotification(ctx, nType, webhookURL, signKey, msg); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("推送失败: %s", err.Error())})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "测试推送成功"})
+}
+
 func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 	var req struct {
 		UpstreamSiteID string `json:"upstreamSiteId"`
