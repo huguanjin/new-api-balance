@@ -1245,6 +1245,61 @@ func GetChannelAvailabilityNotifyConfigHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, config)
 }
 
+const channelAvailabilityGlobalNotifyConfigID = "channel_availability_global_notify"
+
+func loadChannelAvailabilityGlobalNotifyConfig(ctx context.Context) (models.ChannelAvailabilityGlobalNotifyConfig, bool, error) {
+	var config models.ChannelAvailabilityGlobalNotifyConfig
+	err := ChannelAvailabilityGlobalNotifyCol.FindOne(ctx, bson.M{"_id": channelAvailabilityGlobalNotifyConfigID}).Decode(&config)
+	if err == mongo.ErrNoDocuments {
+		return config, false, nil
+	}
+	if err != nil {
+		return config, false, err
+	}
+	return config, true, nil
+}
+
+func GetChannelAvailabilityGlobalNotifyConfigHandler(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	config, _, err := loadChannelAvailabilityGlobalNotifyConfig(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load global notify config"})
+		return
+	}
+	c.JSON(http.StatusOK, config)
+}
+
+func SaveChannelAvailabilityGlobalNotifyConfigHandler(c *gin.Context) {
+	var req struct {
+		NotificationType string `json:"notificationType"`
+		WebhookURL       string `json:"webhookUrl"`
+		SignKey          string `json:"signKey"`
+		WeworkWebhookURL string `json:"weworkWebhookUrl"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	now := time.Now()
+	update := bson.M{
+		"notification_type":  strings.TrimSpace(req.NotificationType),
+		"webhook_url":        strings.TrimSpace(req.WebhookURL),
+		"sign_key":           strings.TrimSpace(req.SignKey),
+		"wework_webhook_url": strings.TrimSpace(req.WeworkWebhookURL),
+		"updated_at":         now,
+	}
+	opts := options.Update().SetUpsert(true)
+	if _, err := ChannelAvailabilityGlobalNotifyCol.UpdateOne(ctx, bson.M{"_id": channelAvailabilityGlobalNotifyConfigID}, bson.M{"$set": update}, opts); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save global notify config"})
+		return
+	}
+	config, _, _ := loadChannelAvailabilityGlobalNotifyConfig(ctx)
+	c.JSON(http.StatusOK, config)
+}
+
 func SaveChannelAvailabilityNotifyConfigHandler(c *gin.Context) {
 	var req struct {
 		UpstreamSiteID   string                       `json:"upstreamSiteId"`
@@ -1332,7 +1387,14 @@ func TestChannelAvailabilityNotifyHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	siteName := ""
+	if site, sErr := loadUpstreamSite(ctx, siteID); sErr == nil {
+		siteName = site.Name
+	}
 	msg := "【渠道可用性推送测试】\n这是一条测试消息，收到此消息说明推送配置正常。"
+	if siteName != "" {
+		msg = fmt.Sprintf("【渠道可用性推送测试 - %s】\n这是一条测试消息，收到此消息说明推送配置正常。", siteName)
+	}
 	if err := sendAvailabilityNotification(ctx, nType, webhookURL, signKey, msg); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("推送失败: %s", err.Error())})
 		return
@@ -1374,6 +1436,10 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	siteName := ""
+	if site, sErr := loadUpstreamSite(ctx, siteID); sErr == nil {
+		siteName = site.Name
 	}
 
 	shouldRefresh := notifyConfig.RefreshChannels == nil || *notifyConfig.RefreshChannels
@@ -1469,7 +1535,7 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 	notified := false
 	notifyErrMsg := ""
 	if len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0 {
-		msg := buildAvailabilityNotifyMessage(results, enabledFailed, disabledSuccess, enabledSlow, missingIDs, notifyConfig.AutoToggle, notifyConfig.SlowThresholdMs, toggleResults)
+		msg := buildAvailabilityNotifyMessage(siteName, results, enabledFailed, disabledSuccess, enabledSlow, missingIDs, notifyConfig.AutoToggle, notifyConfig.SlowThresholdMs, toggleResults)
 		if err := sendAvailabilityNotification(ctx, nType, webhookURL, signKey, msg); err != nil {
 			notifyErrMsg = err.Error()
 		} else {
@@ -1529,9 +1595,25 @@ func resolveNotifyWebhook(ctx context.Context, config models.ChannelAvailability
 	if webhookURL != "" {
 		return nType, webhookURL, signKey, nil
 	}
+	globalConfig, found, loadErr := loadChannelAvailabilityGlobalNotifyConfig(ctx)
+	if loadErr == nil && found {
+		gType := globalConfig.NotificationType
+		if gType == "" {
+			gType = "feishu"
+		}
+		if gType == "feishu" {
+			webhookURL = strings.TrimSpace(globalConfig.WebhookURL)
+			signKey = strings.TrimSpace(globalConfig.SignKey)
+		} else {
+			webhookURL = strings.TrimSpace(globalConfig.WeworkWebhookURL)
+		}
+		if webhookURL != "" {
+			return gType, webhookURL, signKey, nil
+		}
+	}
 	balanceConfig, found, loadErr := loadNotificationConfig(ctx)
 	if loadErr != nil || !found {
-		return "", "", "", fmt.Errorf("未配置推送机器人，且余额通知中也未配置")
+		return "", "", "", fmt.Errorf("未配置推送机器人，且全局配置和余额通知中也未配置")
 	}
 	nType = balanceConfig.NotificationType
 	if nType == "" {
@@ -1586,7 +1668,7 @@ func writeModelResultDetails(b *strings.Builder, r channelTestResult) {
 	}
 }
 
-func buildAvailabilityNotifyMessage(allResults []channelTestResult, enabledFailed, disabledSuccess, enabledSlow []channelTestResult, missingIDs []int, autoToggle bool, slowThresholdMs int, toggleResults []channelStatusChangeResult) string {
+func buildAvailabilityNotifyMessage(siteName string, allResults []channelTestResult, enabledFailed, disabledSuccess, enabledSlow []channelTestResult, missingIDs []int, autoToggle bool, slowThresholdMs int, toggleResults []channelStatusChangeResult) string {
 	var b strings.Builder
 	successCount := 0
 	for _, r := range allResults {
@@ -1594,7 +1676,11 @@ func buildAvailabilityNotifyMessage(allResults []channelTestResult, enabledFaile
 			successCount++
 		}
 	}
-	b.WriteString("【渠道可用性测试通知】\n")
+	if siteName != "" {
+		b.WriteString(fmt.Sprintf("【渠道可用性测试通知 - %s】\n", siteName))
+	} else {
+		b.WriteString("【渠道可用性测试通知】\n")
+	}
 	b.WriteString(fmt.Sprintf("共测试 %d 个渠道，成功 %d，失败 %d\n", len(allResults), successCount, len(allResults)-successCount))
 
 	toggleResultMap := make(map[int]bool, len(toggleResults))
@@ -1725,6 +1811,10 @@ func runScheduledNotifyForSite(ctx context.Context, config models.ChannelAvailab
 	if credErr != nil {
 		return
 	}
+	siteName := ""
+	if site, sErr := loadUpstreamSite(ctx, siteID); sErr == nil {
+		siteName = site.Name
+	}
 
 	shouldRefresh := config.RefreshChannels == nil || *config.RefreshChannels
 	if shouldRefresh {
@@ -1804,7 +1894,7 @@ func runScheduledNotifyForSite(ctx context.Context, config models.ChannelAvailab
 	}
 
 	if len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0 {
-		msg := buildAvailabilityNotifyMessage(classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, config.AutoToggle, config.SlowThresholdMs, toggleResults)
+		msg := buildAvailabilityNotifyMessage(siteName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, config.AutoToggle, config.SlowThresholdMs, toggleResults)
 		if err := sendAvailabilityNotification(ctx, nType, webhookURL, signKey, msg); err != nil {
 			log.Printf("[channel-availability-scheduler] site %s send notification error: %v", siteID.Hex(), err)
 		}

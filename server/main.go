@@ -67,6 +67,8 @@ func main() {
 			protected.POST("/channel-availability/delete", handlers.DeleteUpstreamChannelsHandler)
 			protected.GET("/channel-availability/notify-config", handlers.GetChannelAvailabilityNotifyConfigHandler)
 			protected.PUT("/channel-availability/notify-config", handlers.SaveChannelAvailabilityNotifyConfigHandler)
+			protected.GET("/channel-availability/global-notify-config", handlers.GetChannelAvailabilityGlobalNotifyConfigHandler)
+			protected.PUT("/channel-availability/global-notify-config", handlers.SaveChannelAvailabilityGlobalNotifyConfigHandler)
 			protected.POST("/channel-availability/notify-test", handlers.TestChannelAvailabilityNotifyHandler)
 			protected.POST("/channel-availability/notify-run", handlers.RunChannelAvailabilityNotifyHandler)
 			protected.GET("/codex/config", handlers.GetCodexConfigHandler)

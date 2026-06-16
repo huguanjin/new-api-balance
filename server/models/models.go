@@ -116,6 +116,15 @@ type ChannelAvailabilityNotifyConfig struct {
 	UpdatedAt        time.Time              `bson:"updated_at" json:"updatedAt"`
 }
 
+type ChannelAvailabilityGlobalNotifyConfig struct {
+	ID               string    `bson:"_id,omitempty" json:"-"`
+	NotificationType string    `bson:"notification_type" json:"notificationType"`
+	WebhookURL       string    `bson:"webhook_url" json:"webhookUrl"`
+	SignKey          string    `bson:"sign_key" json:"signKey"`
+	WeworkWebhookURL string    `bson:"wework_webhook_url" json:"weworkWebhookUrl"`
+	UpdatedAt        time.Time `bson:"updated_at" json:"updatedAt"`
+}
+
 type UpstreamChannel struct {
 	ID               primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	UpstreamSiteID   primitive.ObjectID `bson:"upstream_site_id" json:"upstreamSiteId"`

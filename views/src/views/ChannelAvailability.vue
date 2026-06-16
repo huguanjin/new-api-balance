@@ -15,6 +15,7 @@
         <el-button type="danger" @click="batchDisableChannels" :loading="batchDisabling" :disabled="!selectedChannels.length">批量禁用</el-button>
         <el-button type="danger" plain @click="batchDeleteChannels" :loading="batchDeleting" :disabled="!selectedChannels.length">批量删除</el-button>
         <el-button type="info" @click="openNotifyConfigDialog" :disabled="!selectedSiteId">推送配置</el-button>
+        <el-button type="info" plain @click="openGlobalNotifyConfigDialog">全局机器人配置</el-button>
       </div>
     </div>
 
@@ -271,7 +272,7 @@
         class="config-alert"
         type="info"
         :closable="false"
-        title="Webhook 留空则自动使用余额推送的机器人配置"
+        title="Webhook 留空则依次使用全局机器人配置、余额推送的机器人配置"
       />
       <el-form :model="notifyForm" label-width="130px" v-loading="notifyConfigLoading">
         <el-form-item label="启用">
@@ -387,6 +388,39 @@
         </span>
       </template>
     </el-dialog>
+
+    <!-- 全局机器人配置弹窗 -->
+    <el-dialog title="全局机器人配置" v-model="globalNotifyConfigDialogVisible" width="520px" :close-on-click-modal="false">
+      <el-alert
+        class="config-alert"
+        type="info"
+        :closable="false"
+        title="配置全局共用机器人后，各站点推送配置中 Webhook 留空时将自动使用此机器人。推送消息中会自动标注站点名称以便区分。"
+      />
+      <el-form :model="globalNotifyForm" label-width="130px" v-loading="globalNotifyConfigLoading">
+        <el-form-item label="通知类型">
+          <el-radio-group v-model="globalNotifyForm.notificationType">
+            <el-radio value="feishu">飞书</el-radio>
+            <el-radio value="wework">企业微信</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="globalNotifyForm.notificationType === 'feishu'" label="飞书 Webhook">
+          <el-input v-model="globalNotifyForm.webhookUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxx" />
+        </el-form-item>
+        <el-form-item v-if="globalNotifyForm.notificationType === 'feishu'" label="签名密钥">
+          <el-input v-model="globalNotifyForm.signKey" type="password" show-password placeholder="可选" />
+        </el-form-item>
+        <el-form-item v-if="globalNotifyForm.notificationType === 'wework'" label="企微 Webhook">
+          <el-input v-model="globalNotifyForm.weworkWebhookUrl" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="globalNotifyConfigDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="saveGlobalNotifyConfig" :loading="savingGlobalNotify">保存</el-button>
+        </span>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -456,6 +490,16 @@ const notifyForm = ref({
 const notifyMissingIds = ref([])
 const notifyChannelSearch = ref('')
 const notifyShowSelectedOnly = ref(false)
+
+const globalNotifyConfigDialogVisible = ref(false)
+const globalNotifyConfigLoading = ref(false)
+const savingGlobalNotify = ref(false)
+const globalNotifyForm = ref({
+  notificationType: 'feishu',
+  webhookUrl: '',
+  signKey: '',
+  weworkWebhookUrl: ''
+})
 
 const customModelDialogVisible = ref(false)
 const customModelChannelId = ref(0)
@@ -1044,6 +1088,43 @@ const runNotifyPush = async () => {
 }
 
 // --- common ---
+
+const openGlobalNotifyConfigDialog = async () => {
+  globalNotifyConfigDialogVisible.value = true
+  globalNotifyConfigLoading.value = true
+  try {
+    const res = await axios.get('/api/channel-availability/global-notify-config', {
+      headers: authHeaders()
+    })
+    globalNotifyForm.value = {
+      notificationType: res.data?.notificationType || 'feishu',
+      webhookUrl: res.data?.webhookUrl || '',
+      signKey: res.data?.signKey || '',
+      weworkWebhookUrl: res.data?.weworkWebhookUrl || ''
+    }
+  } catch {
+    ElMessage.error('获取全局机器人配置失败')
+  } finally {
+    globalNotifyConfigLoading.value = false
+  }
+}
+
+const saveGlobalNotifyConfig = async () => {
+  savingGlobalNotify.value = true
+  try {
+    await axios.put('/api/channel-availability/global-notify-config', globalNotifyForm.value, {
+      headers: authHeaders()
+    })
+    ElMessage.success('全局机器人配置已保存')
+    globalNotifyConfigDialogVisible.value = false
+  } catch (err) {
+    ElMessage.error(err.response?.data?.error || '保存全局机器人配置失败')
+  } finally {
+    savingGlobalNotify.value = false
+  }
+}
+
+// --- common (applyTestResults) ---
 
 const applyTestResults = (results) => {
   const map = {}

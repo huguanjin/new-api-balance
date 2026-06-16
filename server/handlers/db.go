@@ -25,8 +25,9 @@ var (
 	UpstreamSiteCol              *mongo.Collection
 	ModelDetectionConfigCol      *mongo.Collection
 	ModelDetectionJobCol         *mongo.Collection
-	ChannelAvailabilityNotifyCol *mongo.Collection
-	UpstreamChannelCol           *mongo.Collection
+	ChannelAvailabilityNotifyCol       *mongo.Collection
+	ChannelAvailabilityGlobalNotifyCol *mongo.Collection
+	UpstreamChannelCol                 *mongo.Collection
 	ChannelTestResultCol         *mongo.Collection
 	CodexConfigCol               *mongo.Collection
 )
@@ -68,6 +69,7 @@ func InitDB() error {
 	ModelDetectionConfigCol = db.Collection("model_detection_configs")
 	ModelDetectionJobCol = db.Collection("model_detection_jobs")
 	ChannelAvailabilityNotifyCol = db.Collection("channel_availability_notify_configs")
+	ChannelAvailabilityGlobalNotifyCol = db.Collection("channel_availability_global_notify_config")
 	UpstreamChannelCol = db.Collection("upstream_channels")
 	ChannelTestResultCol = db.Collection("channel_test_results")
 	CodexConfigCol = db.Collection("codex_configs")
