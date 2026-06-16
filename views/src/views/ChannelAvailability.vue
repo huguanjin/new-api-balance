@@ -15,7 +15,7 @@
         <el-button type="danger" @click="batchDisableChannels" :loading="batchDisabling" :disabled="!selectedChannels.length">批量禁用</el-button>
         <el-button type="danger" plain @click="batchDeleteChannels" :loading="batchDeleting" :disabled="!selectedChannels.length">批量删除</el-button>
         <el-button type="info" @click="openNotifyConfigDialog" :disabled="!selectedSiteId">推送配置</el-button>
-        <el-button type="info" plain @click="openGlobalNotifyConfigDialog">全局机器人配置</el-button>
+        <el-button type="info" plain @click="openGlobalNotifyConfigDialog">全局推送配置</el-button>
       </div>
     </div>
 
@@ -272,7 +272,7 @@
         class="config-alert"
         type="info"
         :closable="false"
-        title="Webhook 留空则依次使用全局机器人配置、余额推送的机器人配置"
+        title="Webhook 和推送计划留空时将使用全局推送配置，Webhook 均未配置时回退到余额推送的机器人"
       />
       <el-form :model="notifyForm" label-width="130px" v-loading="notifyConfigLoading">
         <el-form-item label="启用">
@@ -326,7 +326,7 @@
             </div>
             <el-button :icon="Plus" type="primary" link size="small" @click="addNotifySchedule">添加时间段</el-button>
           </div>
-          <div class="form-tip">不配置推送计划时仅支持手动执行；配置后系统将按计划自动检测并推送</div>
+          <div class="form-tip">不配置推送计划时将使用全局推送计划；均未配置则仅支持手动执行</div>
         </el-form-item>
         <el-form-item label="生效渠道 ID">
           <div class="notify-channel-picker">
@@ -389,13 +389,13 @@
       </template>
     </el-dialog>
 
-    <!-- 全局机器人配置弹窗 -->
-    <el-dialog title="全局机器人配置" v-model="globalNotifyConfigDialogVisible" width="520px" :close-on-click-modal="false">
+    <!-- 全局推送配置弹窗 -->
+    <el-dialog title="全局推送配置" v-model="globalNotifyConfigDialogVisible" width="620px" :close-on-click-modal="false">
       <el-alert
         class="config-alert"
         type="info"
         :closable="false"
-        title="配置全局共用机器人后，各站点推送配置中 Webhook 留空时将自动使用此机器人。推送消息中会自动标注站点名称以便区分。"
+        title="全局配置的机器人和推送计划可被各站点共用。站点自身配置了 Webhook 或推送计划时优先使用站点配置。推送消息中会自动标注站点名称以便区分。"
       />
       <el-form :model="globalNotifyForm" label-width="130px" v-loading="globalNotifyConfigLoading">
         <el-form-item label="通知类型">
@@ -412,6 +412,21 @@
         </el-form-item>
         <el-form-item v-if="globalNotifyForm.notificationType === 'wework'" label="企微 Webhook">
           <el-input v-model="globalNotifyForm.weworkWebhookUrl" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx" />
+        </el-form-item>
+        <el-form-item label="推送计划">
+          <div class="schedules-wrapper">
+            <div v-for="(sch, idx) in globalNotifyForm.schedules" :key="idx" class="schedule-row">
+              <el-time-picker v-model="sch.startTimeObj" placeholder="开始" format="HH:mm" value-format="HH:mm" style="width: 110px" @change="v => sch.startTime = v" />
+              <span class="schedule-sep">至</span>
+              <el-time-picker v-model="sch.endTimeObj" placeholder="结束" format="HH:mm" value-format="HH:mm" style="width: 110px" @change="v => sch.endTime = v" />
+              <span class="schedule-sep">每</span>
+              <el-input-number v-model="sch.intervalMinutes" :min="1" :max="1440" size="small" style="width: 110px" />
+              <span class="schedule-sep">分钟</span>
+              <el-button :icon="Delete" type="danger" link size="small" @click="globalNotifyForm.schedules.splice(idx, 1)" />
+            </div>
+            <el-button :icon="Plus" type="primary" link size="small" @click="addGlobalNotifySchedule">添加时间段</el-button>
+          </div>
+          <div class="form-tip">各站点推送配置中未配置推送计划时，将使用此全局计划</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -498,7 +513,8 @@ const globalNotifyForm = ref({
   notificationType: 'feishu',
   webhookUrl: '',
   signKey: '',
-  weworkWebhookUrl: ''
+  weworkWebhookUrl: '',
+  schedules: []
 })
 
 const customModelDialogVisible = ref(false)
@@ -1100,25 +1116,50 @@ const openGlobalNotifyConfigDialog = async () => {
       notificationType: res.data?.notificationType || 'feishu',
       webhookUrl: res.data?.webhookUrl || '',
       signKey: res.data?.signKey || '',
-      weworkWebhookUrl: res.data?.weworkWebhookUrl || ''
+      weworkWebhookUrl: res.data?.weworkWebhookUrl || '',
+      schedules: (res.data?.schedules || []).map(s => ({
+        startTime: s.start_time || '',
+        endTime: s.end_time || '',
+        intervalMinutes: s.interval_minutes || 30,
+        startTimeObj: s.start_time || '',
+        endTimeObj: s.end_time || ''
+      }))
     }
   } catch {
-    ElMessage.error('获取全局机器人配置失败')
+    ElMessage.error('获取全局推送配置失败')
   } finally {
     globalNotifyConfigLoading.value = false
   }
 }
 
+const addGlobalNotifySchedule = () => {
+  globalNotifyForm.value.schedules.push({
+    startTime: '09:00',
+    endTime: '18:00',
+    intervalMinutes: 30,
+    startTimeObj: '09:00',
+    endTimeObj: '18:00'
+  })
+}
+
 const saveGlobalNotifyConfig = async () => {
   savingGlobalNotify.value = true
   try {
-    await axios.put('/api/channel-availability/global-notify-config', globalNotifyForm.value, {
+    const payload = {
+      ...globalNotifyForm.value,
+      schedules: (globalNotifyForm.value.schedules || []).map(s => ({
+        start_time: s.startTime || s.startTimeObj || '',
+        end_time: s.endTime || s.endTimeObj || '',
+        interval_minutes: s.intervalMinutes || 30
+      }))
+    }
+    await axios.put('/api/channel-availability/global-notify-config', payload, {
       headers: authHeaders()
     })
-    ElMessage.success('全局机器人配置已保存')
+    ElMessage.success('全局推送配置已保存')
     globalNotifyConfigDialogVisible.value = false
   } catch (err) {
-    ElMessage.error(err.response?.data?.error || '保存全局机器人配置失败')
+    ElMessage.error(err.response?.data?.error || '保存全局推送配置失败')
   } finally {
     savingGlobalNotify.value = false
   }

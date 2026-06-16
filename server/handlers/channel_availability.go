@@ -1272,10 +1272,11 @@ func GetChannelAvailabilityGlobalNotifyConfigHandler(c *gin.Context) {
 
 func SaveChannelAvailabilityGlobalNotifyConfigHandler(c *gin.Context) {
 	var req struct {
-		NotificationType string `json:"notificationType"`
-		WebhookURL       string `json:"webhookUrl"`
-		SignKey          string `json:"signKey"`
-		WeworkWebhookURL string `json:"weworkWebhookUrl"`
+		NotificationType string                        `json:"notificationType"`
+		WebhookURL       string                        `json:"webhookUrl"`
+		SignKey          string                        `json:"signKey"`
+		WeworkWebhookURL string                        `json:"weworkWebhookUrl"`
+		Schedules        []models.NotificationSchedule `json:"schedules"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
@@ -1283,12 +1284,18 @@ func SaveChannelAvailabilityGlobalNotifyConfigHandler(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	req.Schedules = normalizeNotificationSchedules(req.Schedules)
+	if err := validateNotificationSchedules(req.Schedules); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	now := time.Now()
 	update := bson.M{
 		"notification_type":  strings.TrimSpace(req.NotificationType),
 		"webhook_url":        strings.TrimSpace(req.WebhookURL),
 		"sign_key":           strings.TrimSpace(req.SignKey),
 		"wework_webhook_url": strings.TrimSpace(req.WeworkWebhookURL),
+		"schedules":          req.Schedules,
 		"updated_at":         now,
 	}
 	opts := options.Update().SetUpsert(true)
@@ -1769,6 +1776,8 @@ func runScheduledChannelAvailabilityNotify() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
+	globalConfig, globalFound, _ := loadChannelAvailabilityGlobalNotifyConfig(ctx)
+
 	cursor, err := ChannelAvailabilityNotifyCol.Find(ctx, bson.M{"enabled": true})
 	if err != nil {
 		return
@@ -1780,16 +1789,23 @@ func runScheduledChannelAvailabilityNotify() {
 		if err := cursor.Decode(&config); err != nil {
 			continue
 		}
-		if len(config.ChannelIDs) == 0 || len(config.Schedules) == 0 || config.UpstreamSiteID.IsZero() {
+		if len(config.ChannelIDs) == 0 || config.UpstreamSiteID.IsZero() {
 			continue
 		}
-		runScheduledNotifyForSite(ctx, config)
+		schedules := config.Schedules
+		if len(schedules) == 0 && globalFound {
+			schedules = globalConfig.Schedules
+		}
+		if len(schedules) == 0 {
+			continue
+		}
+		runScheduledNotifyForSite(ctx, config, schedules)
 	}
 }
 
-func runScheduledNotifyForSite(ctx context.Context, config models.ChannelAvailabilityNotifyConfig) {
+func runScheduledNotifyForSite(ctx context.Context, config models.ChannelAvailabilityNotifyConfig, schedules []models.NotificationSchedule) {
 	now := time.Now()
-	schedule, scheduleStart, ok := activeNotificationSchedule(config.Schedules, now)
+	schedule, scheduleStart, ok := activeNotificationSchedule(schedules, now)
 	if !ok {
 		return
 	}
