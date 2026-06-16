@@ -1276,6 +1276,7 @@ func SaveChannelAvailabilityGlobalNotifyConfigHandler(c *gin.Context) {
 		WebhookURL       string                        `json:"webhookUrl"`
 		SignKey          string                        `json:"signKey"`
 		WeworkWebhookURL string                        `json:"weworkWebhookUrl"`
+		AlwaysNotify     bool                          `json:"alwaysNotify"`
 		Schedules        []models.NotificationSchedule `json:"schedules"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1295,6 +1296,7 @@ func SaveChannelAvailabilityGlobalNotifyConfigHandler(c *gin.Context) {
 		"webhook_url":        strings.TrimSpace(req.WebhookURL),
 		"sign_key":           strings.TrimSpace(req.SignKey),
 		"wework_webhook_url": strings.TrimSpace(req.WeworkWebhookURL),
+		"always_notify":      req.AlwaysNotify,
 		"schedules":          req.Schedules,
 		"updated_at":         now,
 	}
@@ -1457,6 +1459,9 @@ func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
+	globalConfig, _, _ := loadChannelAvailabilityGlobalNotifyConfig(ctx)
+	alwaysNotify := globalConfig.AlwaysNotify
+
 	cursor, err := ChannelAvailabilityNotifyCol.Find(ctx, bson.M{"enabled": true})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询站点配置失败"})
@@ -1589,7 +1594,7 @@ func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
 		_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": config.ID}, bson.M{"$set": bson.M{"last_attempt_at": nowTs}})
 
 		hasChanges := len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0
-		if hasChanges {
+		if hasChanges || alwaysNotify {
 			siteNotifyResults = append(siteNotifyResults, globalSiteNotifyResult{
 				SiteName:        siteName,
 				Config:          config,
@@ -1758,6 +1763,10 @@ func buildGlobalAvailabilityNotifyMessage(sites []globalSiteNotifyResult) string
 		if len(site.MissingIDs) > 0 {
 			b.WriteString(fmt.Sprintf("\n⚠️ 以下配置的渠道 ID 在上游已不存在：%v\n", site.MissingIDs))
 		}
+
+		if len(site.DisabledSuccess) == 0 && len(site.EnabledFailed) == 0 && len(site.EnabledSlow) == 0 {
+			b.WriteString("\n✅ 所有渠道运行正常\n")
+		}
 	}
 
 	return b.String()
@@ -1836,7 +1845,7 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 		}
 	}
 
-	filter := bson.M{"channelId": bson.M{"$in": validIDs}}
+	filter := bson.M{"channelId": bson.M{"$in": validIDs}, "upstream_site_id": siteID}
 	if notifyConfig.StatusFilter == 1 {
 		filter["status"] = 1
 	} else if notifyConfig.StatusFilter == 2 {
@@ -2178,7 +2187,7 @@ func runScheduledChannelAvailabilityNotify() {
 			}
 		}
 
-		result := runAndCollectSiteResult(ctx, config)
+		result := runAndCollectSiteResult(ctx, config, globalConfig.AlwaysNotify)
 		if result != nil {
 			siteNotifyResults = append(siteNotifyResults, *result)
 		}
@@ -2197,7 +2206,7 @@ func runScheduledChannelAvailabilityNotify() {
 	}
 }
 
-func runAndCollectSiteResult(ctx context.Context, config models.ChannelAvailabilityNotifyConfig) *globalSiteNotifyResult {
+func runAndCollectSiteResult(ctx context.Context, config models.ChannelAvailabilityNotifyConfig, alwaysNotify bool) *globalSiteNotifyResult {
 	siteID := config.UpstreamSiteID
 	siteName := ""
 	if site, sErr := loadUpstreamSite(ctx, siteID); sErr == nil {
@@ -2291,7 +2300,7 @@ func runAndCollectSiteResult(ctx context.Context, config models.ChannelAvailabil
 
 	cleanTestResults(ctx, runID)
 
-	if len(enabledFailed) == 0 && len(disabledSuccess) == 0 && len(enabledSlow) == 0 {
+	if !alwaysNotify && len(enabledFailed) == 0 && len(disabledSuccess) == 0 && len(enabledSlow) == 0 {
 		return nil
 	}
 

@@ -428,6 +428,10 @@
           </div>
           <div class="form-tip">各站点推送配置中未配置推送计划时，将使用此全局计划</div>
         </el-form-item>
+        <el-form-item label="始终推送">
+          <el-switch v-model="globalNotifyForm.alwaysNotify" />
+          <div class="form-tip">开启后每次执行推送都会发送完整报告，关闭则仅在存在异常渠道时推送</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -518,6 +522,7 @@ const globalNotifyForm = ref({
   webhookUrl: '',
   signKey: '',
   weworkWebhookUrl: '',
+  alwaysNotify: false,
   schedules: []
 })
 
@@ -1121,6 +1126,7 @@ const openGlobalNotifyConfigDialog = async () => {
       webhookUrl: res.data?.webhookUrl || '',
       signKey: res.data?.signKey || '',
       weworkWebhookUrl: res.data?.weworkWebhookUrl || '',
+      alwaysNotify: res.data?.alwaysNotify || false,
       schedules: (res.data?.schedules || []).map(s => ({
         startTime: s.start_time || '',
         endTime: s.end_time || '',

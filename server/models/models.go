@@ -125,6 +125,7 @@ type ChannelAvailabilityGlobalNotifyConfig struct {
 	WebhookURL       string                 `bson:"webhook_url" json:"webhookUrl"`
 	SignKey          string                 `bson:"sign_key" json:"signKey"`
 	WeworkWebhookURL string                 `bson:"wework_webhook_url" json:"weworkWebhookUrl"`
+	AlwaysNotify     bool                   `bson:"always_notify" json:"alwaysNotify"`
 	Schedules        []NotificationSchedule `bson:"schedules" json:"schedules"`
 	UpdatedAt        time.Time              `bson:"updated_at" json:"updatedAt"`
 }
