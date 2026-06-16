@@ -1467,6 +1467,8 @@ func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
 	}
 	var results []siteResult
 
+	cleanTestResults(ctx, "")
+
 	for cursor.Next(ctx) {
 		var config models.ChannelAvailabilityNotifyConfig
 		if err := cursor.Decode(&config); err != nil {
@@ -1554,7 +1556,6 @@ func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
 		}
 
 		runID := fmt.Sprintf("global-%d-%s", time.Now().UnixNano(), siteID.Hex())
-		cleanTestResults(ctx, "")
 		if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, cred.SkipStatusCodes); err != nil {
 			results = append(results, siteResult{SiteName: siteName, Error: "测试结果写入失败"})
 			continue
@@ -2001,6 +2002,8 @@ func runScheduledChannelAvailabilityNotify() {
 	}
 	defer cursor.Close(ctx)
 
+	cleanTestResults(ctx, "")
+
 	for cursor.Next(ctx) {
 		var config models.ChannelAvailabilityNotifyConfig
 		if err := cursor.Decode(&config); err != nil {
@@ -2101,7 +2104,6 @@ func runScheduledNotifyForSite(ctx context.Context, config models.ChannelAvailab
 	}
 
 	runID := fmt.Sprintf("sched-%d", time.Now().UnixNano())
-	cleanTestResults(ctx, "")
 	if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, cred.SkipStatusCodes); err != nil {
 		log.Printf("[channel-availability-scheduler] site %s write test results error: %v", siteID.Hex(), err)
 		return
