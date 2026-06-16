@@ -1440,6 +1440,192 @@ func TestChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "测试推送成功"})
 }
 
+func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	globalConfig, globalFound, err := loadChannelAvailabilityGlobalNotifyConfig(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "加载全局配置失败"})
+		return
+	}
+
+	cursor, err := ChannelAvailabilityNotifyCol.Find(ctx, bson.M{"enabled": true})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询站点配置失败"})
+		return
+	}
+	defer cursor.Close(ctx)
+
+	type siteResult struct {
+		SiteName string `json:"siteName"`
+		Tested   int    `json:"tested"`
+		Success  int    `json:"success"`
+		Fail     int    `json:"fail"`
+		Notified bool   `json:"notified"`
+		Error    string `json:"error,omitempty"`
+	}
+	var results []siteResult
+
+	for cursor.Next(ctx) {
+		var config models.ChannelAvailabilityNotifyConfig
+		if err := cursor.Decode(&config); err != nil {
+			continue
+		}
+		if len(config.ChannelIDs) == 0 || config.UpstreamSiteID.IsZero() {
+			continue
+		}
+
+		siteID := config.UpstreamSiteID
+		siteName := ""
+		if site, sErr := loadUpstreamSite(ctx, siteID); sErr == nil {
+			siteName = site.Name
+		}
+		if siteName == "" {
+			siteName = siteID.Hex()
+		}
+
+		nType, webhookURL, signKey, resolveErr := resolveNotifyWebhook(ctx, config)
+		if resolveErr != nil {
+			results = append(results, siteResult{SiteName: siteName, Error: resolveErr.Error()})
+			continue
+		}
+		cred, credErr := resolveCredentialsFromSite(ctx, siteID)
+		if credErr != nil {
+			results = append(results, siteResult{SiteName: siteName, Error: credErr.Error()})
+			continue
+		}
+
+		shouldRefresh := config.RefreshChannels == nil || *config.RefreshChannels
+		if shouldRefresh {
+			channelURL := cred.BaseURL + "/api/channel/"
+			freshItems, fetchErr := fetchAllUpstreamChannelItems(ctx, channelURL, cred.Token, cred.UserID)
+			if fetchErr != nil {
+				results = append(results, siteResult{SiteName: siteName, Error: fmt.Sprintf("拉取渠道失败: %s", fetchErr.Error())})
+				continue
+			}
+			if err := saveUpstreamChannels(ctx, freshItems, siteID); err != nil {
+				results = append(results, siteResult{SiteName: siteName, Error: "保存渠道失败"})
+				continue
+			}
+		}
+
+		storedChannels, err := listUpstreamChannels(ctx, siteID)
+		if err != nil {
+			results = append(results, siteResult{SiteName: siteName, Error: "读取渠道失败"})
+			continue
+		}
+		upstreamIDSet := make(map[int]bool, len(storedChannels))
+		for _, ch := range storedChannels {
+			upstreamIDSet[ch.ChannelID] = true
+		}
+		var missingIDs []int
+		var validIDs []int
+		for _, id := range config.ChannelIDs {
+			if upstreamIDSet[id] {
+				validIDs = append(validIDs, id)
+			} else {
+				missingIDs = append(missingIDs, id)
+			}
+		}
+
+		filter := bson.M{"channelId": bson.M{"$in": validIDs}, "upstream_site_id": siteID}
+		if config.StatusFilter == 1 {
+			filter["status"] = 1
+		} else if config.StatusFilter == 2 {
+			filter["status"] = 2
+		}
+		channelCursor, chErr := UpstreamChannelCol.Find(ctx, filter)
+		if chErr != nil {
+			results = append(results, siteResult{SiteName: siteName, Error: "查询渠道失败"})
+			continue
+		}
+		var targetChannels []models.UpstreamChannel
+		if err := channelCursor.All(ctx, &targetChannels); err != nil {
+			channelCursor.Close(ctx)
+			results = append(results, siteResult{SiteName: siteName, Error: "解析渠道失败"})
+			continue
+		}
+		channelCursor.Close(ctx)
+
+		if len(targetChannels) == 0 {
+			results = append(results, siteResult{SiteName: siteName})
+			continue
+		}
+
+		runID := fmt.Sprintf("global-%d-%s", time.Now().UnixNano(), siteID.Hex())
+		cleanTestResults(ctx, "")
+		if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, cred.SkipStatusCodes); err != nil {
+			results = append(results, siteResult{SiteName: siteName, Error: "测试结果写入失败"})
+			continue
+		}
+
+		classified, classErr := classifyTestResults(ctx, runID, config.SlowThresholdMs)
+		if classErr != nil {
+			cleanTestResults(ctx, runID)
+			results = append(results, siteResult{SiteName: siteName, Error: "读取测试结果失败"})
+			continue
+		}
+
+		enabledFailed := classified.EnabledFailed
+		disabledSuccess := classified.DisabledSuccess
+		enabledSlow := classified.EnabledSlow
+
+		var toggleResults []channelStatusChangeResult
+		if config.AutoToggle && (len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0) {
+			toggleResults = autoToggleChannels(ctx, enabledFailed, disabledSuccess, cred)
+			for _, r := range enabledSlow {
+				tr := updateOneChannelStatus(ctx, r.ChannelID, r.Name, 2, cred)
+				toggleResults = append(toggleResults, tr)
+			}
+		}
+
+		notified := false
+		if len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0 {
+			msg := buildAvailabilityNotifyMessage(siteName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, config.AutoToggle, config.SlowThresholdMs, toggleResults)
+			if err := sendAvailabilityNotification(ctx, nType, webhookURL, signKey, msg); err != nil {
+				log.Printf("[channel-availability-global-run] site %s send notification error: %v", siteName, err)
+			} else {
+				notified = true
+			}
+		}
+
+		cleanTestResults(ctx, runID)
+		nowTs := time.Now()
+		_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": config.ID}, bson.M{"$set": bson.M{"last_attempt_at": nowTs}})
+
+		sr := siteResult{
+			SiteName: siteName,
+			Tested:   len(classified.All),
+			Success:  classified.SuccessCount,
+			Fail:     len(classified.All) - classified.SuccessCount,
+			Notified: notified,
+		}
+		results = append(results, sr)
+	}
+
+	_ = globalFound
+	_ = globalConfig
+
+	if len(results) == 0 {
+		c.JSON(http.StatusOK, gin.H{"message": "没有已启用的站点推送配置", "results": []siteResult{}})
+		return
+	}
+
+	totalTested := 0
+	totalNotified := 0
+	for _, r := range results {
+		totalTested += r.Tested
+		if r.Notified {
+			totalNotified++
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"message": fmt.Sprintf("共处理 %d 个站点，测试 %d 个渠道，推送 %d 个站点", len(results), totalTested, totalNotified),
+		"results": results,
+	})
+}
+
 func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 	var req struct {
 		UpstreamSiteID string `json:"upstreamSiteId"`

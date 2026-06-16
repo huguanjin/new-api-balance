@@ -70,6 +70,7 @@ func main() {
 			protected.GET("/channel-availability/global-notify-config", handlers.GetChannelAvailabilityGlobalNotifyConfigHandler)
 			protected.PUT("/channel-availability/global-notify-config", handlers.SaveChannelAvailabilityGlobalNotifyConfigHandler)
 			protected.POST("/channel-availability/global-notify-test", handlers.TestChannelAvailabilityGlobalNotifyHandler)
+			protected.POST("/channel-availability/global-notify-run", handlers.RunChannelAvailabilityGlobalNotifyHandler)
 			protected.POST("/channel-availability/notify-test", handlers.TestChannelAvailabilityNotifyHandler)
 			protected.POST("/channel-availability/notify-run", handlers.RunChannelAvailabilityNotifyHandler)
 			protected.GET("/codex/config", handlers.GetCodexConfigHandler)

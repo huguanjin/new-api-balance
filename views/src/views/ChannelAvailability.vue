@@ -433,6 +433,7 @@
         <span class="dialog-footer">
           <el-button @click="globalNotifyConfigDialogVisible = false">取消</el-button>
           <el-button @click="testGlobalNotifyPush" :loading="testingGlobalNotify">测试推送</el-button>
+          <el-button type="success" @click="runGlobalNotifyPush" :loading="runningGlobalNotify">执行推送</el-button>
           <el-button type="primary" @click="saveGlobalNotifyConfig" :loading="savingGlobalNotify">保存</el-button>
         </span>
       </template>
@@ -511,6 +512,7 @@ const globalNotifyConfigDialogVisible = ref(false)
 const globalNotifyConfigLoading = ref(false)
 const savingGlobalNotify = ref(false)
 const testingGlobalNotify = ref(false)
+const runningGlobalNotify = ref(false)
 const globalNotifyForm = ref({
   notificationType: 'feishu',
   webhookUrl: '',
@@ -1178,6 +1180,35 @@ const testGlobalNotifyPush = async () => {
     ElMessage.error(err.response?.data?.error || '测试推送失败')
   } finally {
     testingGlobalNotify.value = false
+  }
+}
+
+const runGlobalNotifyPush = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '将对所有已启用的站点执行渠道可用性测试并推送结果，确认执行？',
+      '全局执行推送',
+      { confirmButtonText: '执行', cancelButtonText: '取消', type: 'info' }
+    )
+  } catch { return }
+
+  runningGlobalNotify.value = true
+  try {
+    const res = await axios.post('/api/channel-availability/global-notify-run', {}, {
+      headers: authHeaders()
+    })
+    const data = res.data || {}
+    ElMessage.success(data.message || '执行完成')
+    const siteResults = data.results || []
+    for (const r of siteResults) {
+      if (r.error) {
+        ElMessage.warning(`${r.siteName}: ${r.error}`)
+      }
+    }
+  } catch (err) {
+    ElMessage.error(err.response?.data?.error || '全局执行推送失败')
+  } finally {
+    runningGlobalNotify.value = false
   }
 }
 
