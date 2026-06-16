@@ -1623,10 +1623,11 @@ func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
 
 	notified := false
 	if len(siteNotifyResults) > 0 {
+		card := buildGlobalAvailabilityNotifyCard(siteNotifyResults)
 		msg := buildGlobalAvailabilityNotifyMessage(siteNotifyResults)
 		nType, webhookURL, signKey, resolveErr := resolveGlobalNotifyWebhook(ctx)
 		if resolveErr == nil {
-			if err := sendAvailabilityNotification(ctx, nType, webhookURL, signKey, msg); err != nil {
+			if err := sendAvailabilityCardNotification(ctx, nType, webhookURL, signKey, card, msg); err != nil {
 				log.Printf("[channel-availability-global-run] send combined notification error: %v", err)
 			} else {
 				notified = true
@@ -1905,8 +1906,9 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 	notified := false
 	notifyErrMsg := ""
 	if len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0 {
+		card := buildAvailabilityNotifyCard(siteName, results, enabledFailed, disabledSuccess, enabledSlow, missingIDs, notifyConfig.AutoToggle, notifyConfig.SlowThresholdMs, toggleResults)
 		msg := buildAvailabilityNotifyMessage(siteName, results, enabledFailed, disabledSuccess, enabledSlow, missingIDs, notifyConfig.AutoToggle, notifyConfig.SlowThresholdMs, toggleResults)
-		if err := sendAvailabilityNotification(ctx, nType, webhookURL, signKey, msg); err != nil {
+		if err := sendAvailabilityCardNotification(ctx, nType, webhookURL, signKey, card, msg); err != nil {
 			notifyErrMsg = err.Error()
 		} else {
 			notified = true
@@ -2006,6 +2008,298 @@ func sendAvailabilityNotification(ctx context.Context, nType, webhookURL, signKe
 		return sendWeworkMarkdownNotification(ctx, webhookURL, message)
 	}
 	return sendFeishuNotification(ctx, webhookURL, message, signKey)
+}
+
+func sendAvailabilityCardNotification(ctx context.Context, nType, webhookURL, signKey string, card map[string]interface{}, markdownFallback string) error {
+	if nType == "wework" {
+		return sendWeworkMarkdownNotification(ctx, webhookURL, markdownFallback)
+	}
+	return sendFeishuCardNotification(ctx, webhookURL, card, signKey)
+}
+
+func buildChannelLine(r channelTestResult, autoToggle bool, toggleMap map[int]bool) string {
+	var b strings.Builder
+	if r.Success {
+		b.WriteString(fmt.Sprintf("✅ **%s** (ID:%d)\n", r.Name, r.ChannelID))
+		b.WriteString(fmt.Sprintf("模型: %s | 响应: %dms", r.TestModel, r.ResponseTime))
+	} else {
+		b.WriteString(fmt.Sprintf("❌ **%s** (ID:%d)\n", r.Name, r.ChannelID))
+		b.WriteString(fmt.Sprintf("模型: %s", r.TestModel))
+		if len(r.ModelResults) == 0 && r.Error != "" {
+			errMsg := r.Error
+			if len(errMsg) > 80 {
+				errMsg = errMsg[:80] + "..."
+			}
+			b.WriteString(fmt.Sprintf("\n错误: %s", errMsg))
+		}
+	}
+	if autoToggle {
+		if success, ok := toggleMap[r.ChannelID]; ok {
+			if success {
+				b.WriteString(" | ✅ 已自动处理")
+			} else {
+				b.WriteString(" | ❗ 自动处理失败")
+			}
+		}
+	}
+	if len(r.ModelResults) > 1 {
+		for _, mr := range r.ModelResults {
+			if mr.Success {
+				b.WriteString(fmt.Sprintf("\n　　✅ %s %dms", mr.Model, mr.ResponseTime))
+			} else {
+				errMsg := mr.Error
+				if len(errMsg) > 50 {
+					errMsg = errMsg[:50] + "..."
+				}
+				b.WriteString(fmt.Sprintf("\n　　❌ %s %s", mr.Model, errMsg))
+			}
+		}
+	}
+	return b.String()
+}
+
+func buildSlowChannelLine(r channelTestResult, autoToggle bool, toggleMap map[int]bool) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("⏱️ **%s** (ID:%d)\n", r.Name, r.ChannelID))
+	b.WriteString(fmt.Sprintf("模型: %s | 响应: <font color='red'>%dms</font>", r.TestModel, r.ResponseTime))
+	if autoToggle {
+		if success, ok := toggleMap[r.ChannelID]; ok {
+			if success {
+				b.WriteString(" | ✅ 已自动停用")
+			} else {
+				b.WriteString(" | ❗ 自动停用失败")
+			}
+		}
+	}
+	if len(r.ModelResults) > 1 {
+		for _, mr := range r.ModelResults {
+			if mr.Success {
+				b.WriteString(fmt.Sprintf("\n　　✅ %s %dms", mr.Model, mr.ResponseTime))
+			} else {
+				errMsg := mr.Error
+				if len(errMsg) > 50 {
+					errMsg = errMsg[:50] + "..."
+				}
+				b.WriteString(fmt.Sprintf("\n　　❌ %s %s", mr.Model, errMsg))
+			}
+		}
+	}
+	return b.String()
+}
+
+func buildAvailabilityNotifyCard(siteName string, allResults []channelTestResult, enabledFailed, disabledSuccess, enabledSlow []channelTestResult, missingIDs []int, autoToggle bool, slowThresholdMs int, toggleResults []channelStatusChangeResult) map[string]interface{} {
+	successCount := 0
+	for _, r := range allResults {
+		if r.Success {
+			successCount++
+		}
+	}
+	failCount := len(allResults) - successCount
+
+	template := "green"
+	if len(enabledSlow) > 0 {
+		template = "orange"
+	}
+	if len(enabledFailed) > 0 {
+		template = "red"
+	}
+
+	title := "渠道可用性测试通知"
+	if siteName != "" {
+		title = fmt.Sprintf("渠道可用性测试通知 - %s", siteName)
+	}
+
+	toggleMap := make(map[int]bool, len(toggleResults))
+	for _, tr := range toggleResults {
+		toggleMap[tr.ChannelID] = tr.Success
+	}
+
+	elements := []interface{}{
+		map[string]interface{}{
+			"tag": "div",
+			"fields": []interface{}{
+				feishuField("测试渠道", strconv.Itoa(len(allResults))),
+				feishuField("测试时间", time.Now().Format("01-02 15:04")),
+				feishuField("成功", fmt.Sprintf("<font color='green'>%d</font>", successCount)),
+				feishuField("失败", fmt.Sprintf("<font color='red'>%d</font>", failCount)),
+			},
+		},
+	}
+
+	if len(enabledFailed) > 0 {
+		elements = append(elements, map[string]interface{}{"tag": "hr"})
+		elements = append(elements, map[string]interface{}{
+			"tag":  "div",
+			"text": feishuMarkdown(fmt.Sprintf("🔴 **已启用渠道测试失败（%d个）**", len(enabledFailed))),
+		})
+		for _, r := range enabledFailed {
+			elements = append(elements, map[string]interface{}{
+				"tag":  "div",
+				"text": feishuMarkdown(buildChannelLine(r, autoToggle, toggleMap)),
+			})
+		}
+	}
+
+	if len(disabledSuccess) > 0 {
+		elements = append(elements, map[string]interface{}{"tag": "hr"})
+		elements = append(elements, map[string]interface{}{
+			"tag":  "div",
+			"text": feishuMarkdown(fmt.Sprintf("🟢 **已禁用渠道测试通过（%d个）**", len(disabledSuccess))),
+		})
+		for _, r := range disabledSuccess {
+			elements = append(elements, map[string]interface{}{
+				"tag":  "div",
+				"text": feishuMarkdown(buildChannelLine(r, autoToggle, toggleMap)),
+			})
+		}
+	}
+
+	if len(enabledSlow) > 0 {
+		elements = append(elements, map[string]interface{}{"tag": "hr"})
+		elements = append(elements, map[string]interface{}{
+			"tag":  "div",
+			"text": feishuMarkdown(fmt.Sprintf("🟡 **已启用渠道响应超时（%d个，阈值 %dms）**", len(enabledSlow), slowThresholdMs)),
+		})
+		for _, r := range enabledSlow {
+			elements = append(elements, map[string]interface{}{
+				"tag":  "div",
+				"text": feishuMarkdown(buildSlowChannelLine(r, autoToggle, toggleMap)),
+			})
+		}
+	}
+
+	if len(missingIDs) > 0 {
+		elements = append(elements, map[string]interface{}{"tag": "hr"})
+		elements = append(elements, map[string]interface{}{
+			"tag":  "div",
+			"text": feishuMarkdown(fmt.Sprintf("⚠️ 以下配置的渠道 ID 在上游已不存在：%v", missingIDs)),
+		})
+	}
+
+	if len(enabledFailed) == 0 && len(disabledSuccess) == 0 && len(enabledSlow) == 0 {
+		elements = append(elements, map[string]interface{}{"tag": "hr"})
+		elements = append(elements, map[string]interface{}{
+			"tag":  "div",
+			"text": feishuMarkdown("✅ 所有渠道状态正常，无需调整"),
+		})
+	}
+
+	return map[string]interface{}{
+		"config": map[string]interface{}{"wide_screen_mode": true},
+		"header": map[string]interface{}{
+			"template": template,
+			"title":    map[string]string{"tag": "plain_text", "content": title},
+		},
+		"elements": elements,
+	}
+}
+
+func buildGlobalAvailabilityNotifyCard(sites []globalSiteNotifyResult) map[string]interface{} {
+	template := "green"
+	totalTested := 0
+	totalSuccess := 0
+	for _, site := range sites {
+		totalTested += len(site.All)
+		totalSuccess += site.SuccessCount
+		if len(site.EnabledFailed) > 0 {
+			template = "red"
+		} else if len(site.EnabledSlow) > 0 && template != "red" {
+			template = "orange"
+		}
+	}
+
+	elements := []interface{}{
+		map[string]interface{}{
+			"tag": "div",
+			"fields": []interface{}{
+				feishuField("站点数", strconv.Itoa(len(sites))),
+				feishuField("测试时间", time.Now().Format("01-02 15:04")),
+				feishuField("渠道总数", strconv.Itoa(totalTested)),
+				feishuField("总成功/失败", fmt.Sprintf("<font color='green'>%d</font> / <font color='red'>%d</font>", totalSuccess, totalTested-totalSuccess)),
+			},
+		},
+	}
+
+	for _, site := range sites {
+		elements = append(elements, map[string]interface{}{"tag": "hr"})
+
+		successCount := site.SuccessCount
+		totalCount := len(site.All)
+		failCount := totalCount - successCount
+
+		siteHeader := fmt.Sprintf("📍 **%s** — 测试 %d 个，成功 %d，失败 %d", site.SiteName, totalCount, successCount, failCount)
+		elements = append(elements, map[string]interface{}{
+			"tag":  "div",
+			"text": feishuMarkdown(siteHeader),
+		})
+
+		toggleMap := make(map[int]bool, len(site.ToggleResults))
+		for _, tr := range site.ToggleResults {
+			toggleMap[tr.ChannelID] = tr.Success
+		}
+
+		if len(site.EnabledFailed) > 0 {
+			elements = append(elements, map[string]interface{}{
+				"tag":  "div",
+				"text": feishuMarkdown(fmt.Sprintf("🔴 **启用但失败（%d个）**", len(site.EnabledFailed))),
+			})
+			for _, r := range site.EnabledFailed {
+				elements = append(elements, map[string]interface{}{
+					"tag":  "div",
+					"text": feishuMarkdown(buildChannelLine(r, site.Config.AutoToggle, toggleMap)),
+				})
+			}
+		}
+
+		if len(site.DisabledSuccess) > 0 {
+			elements = append(elements, map[string]interface{}{
+				"tag":  "div",
+				"text": feishuMarkdown(fmt.Sprintf("🟢 **禁用但通过（%d个）**", len(site.DisabledSuccess))),
+			})
+			for _, r := range site.DisabledSuccess {
+				elements = append(elements, map[string]interface{}{
+					"tag":  "div",
+					"text": feishuMarkdown(buildChannelLine(r, site.Config.AutoToggle, toggleMap)),
+				})
+			}
+		}
+
+		if len(site.EnabledSlow) > 0 {
+			elements = append(elements, map[string]interface{}{
+				"tag":  "div",
+				"text": feishuMarkdown(fmt.Sprintf("🟡 **响应超时（%d个，阈值 %dms）**", len(site.EnabledSlow), site.Config.SlowThresholdMs)),
+			})
+			for _, r := range site.EnabledSlow {
+				elements = append(elements, map[string]interface{}{
+					"tag":  "div",
+					"text": feishuMarkdown(buildSlowChannelLine(r, site.Config.AutoToggle, toggleMap)),
+				})
+			}
+		}
+
+		if len(site.MissingIDs) > 0 {
+			elements = append(elements, map[string]interface{}{
+				"tag":  "div",
+				"text": feishuMarkdown(fmt.Sprintf("⚠️ 渠道 ID 已不存在：%v", site.MissingIDs)),
+			})
+		}
+
+		if len(site.EnabledFailed) == 0 && len(site.DisabledSuccess) == 0 && len(site.EnabledSlow) == 0 {
+			elements = append(elements, map[string]interface{}{
+				"tag":  "div",
+				"text": feishuMarkdown("✅ 所有渠道运行正常"),
+			})
+		}
+	}
+
+	return map[string]interface{}{
+		"config": map[string]interface{}{"wide_screen_mode": true},
+		"header": map[string]interface{}{
+			"template": template,
+			"title":    map[string]string{"tag": "plain_text", "content": "渠道可用性测试通知 - 全局汇总"},
+		},
+		"elements": elements,
+	}
 }
 
 func autoToggleChannels(ctx context.Context, enabledFailed, disabledSuccess []channelTestResult, cred availabilityCredentials) []channelStatusChangeResult {
@@ -2196,10 +2490,11 @@ func runScheduledChannelAvailabilityNotify() {
 	}
 
 	if len(siteNotifyResults) > 0 {
+		card := buildGlobalAvailabilityNotifyCard(siteNotifyResults)
 		msg := buildGlobalAvailabilityNotifyMessage(siteNotifyResults)
 		nType, webhookURL, signKey, resolveErr := resolveGlobalNotifyWebhook(ctx)
 		if resolveErr == nil {
-			if err := sendAvailabilityNotification(ctx, nType, webhookURL, signKey, msg); err != nil {
+			if err := sendAvailabilityCardNotification(ctx, nType, webhookURL, signKey, card, msg); err != nil {
 				log.Printf("[channel-availability-scheduler] send combined notification error: %v", err)
 			}
 		}
@@ -2423,8 +2718,9 @@ func runScheduledNotifyForSite(ctx context.Context, config models.ChannelAvailab
 	}
 
 	if len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0 {
+		card := buildAvailabilityNotifyCard(siteName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, config.AutoToggle, config.SlowThresholdMs, toggleResults)
 		msg := buildAvailabilityNotifyMessage(siteName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, config.AutoToggle, config.SlowThresholdMs, toggleResults)
-		if err := sendAvailabilityNotification(ctx, nType, webhookURL, signKey, msg); err != nil {
+		if err := sendAvailabilityCardNotification(ctx, nType, webhookURL, signKey, card, msg); err != nil {
 			log.Printf("[channel-availability-scheduler] site %s send notification error: %v", siteID.Hex(), err)
 		}
 	}
