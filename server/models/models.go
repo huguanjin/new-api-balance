@@ -21,6 +21,9 @@ type Site struct {
 	Adapter        string               `bson:"adapter" json:"adapter"`
 	Token          string               `bson:"token" json:"token"`
 	UserID         string               `bson:"userId" json:"userId"`
+	AdminAccount   string               `bson:"admin_account,omitempty" json:"adminAccount,omitempty"`
+	AdminPassword  string               `bson:"admin_password,omitempty" json:"adminPassword,omitempty"`
+	Remark         string               `bson:"remark,omitempty" json:"remark,omitempty"`
 	ModelDetection ModelDetectionConfig `bson:"model_detection,omitempty" json:"modelDetection,omitempty"`
 }
 

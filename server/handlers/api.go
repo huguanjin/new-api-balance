@@ -553,6 +553,15 @@ func applySiteSettings(site *models.Site, existing models.Site) {
 	if strings.TrimSpace(site.Adapter) == "" {
 		site.Adapter = existing.Adapter
 	}
+	if strings.TrimSpace(site.AdminAccount) == "" {
+		site.AdminAccount = existing.AdminAccount
+	}
+	if strings.TrimSpace(site.AdminPassword) == "" {
+		site.AdminPassword = existing.AdminPassword
+	}
+	if strings.TrimSpace(site.Remark) == "" {
+		site.Remark = existing.Remark
+	}
 	if isEmptyModelDetectionConfig(site.ModelDetection) && !isEmptyModelDetectionConfig(existing.ModelDetection) {
 		site.ModelDetection = existing.ModelDetection
 	}

@@ -87,6 +87,15 @@
         <el-form-item label="User ID">
           <el-input v-model="currentSite.userId" placeholder="可选" />
         </el-form-item>
+        <el-form-item label="管理员账号">
+          <el-input v-model="currentSite.adminAccount" placeholder="可选，用于记录上游站点的登录账号" />
+        </el-form-item>
+        <el-form-item label="管理员密码">
+          <el-input v-model="currentSite.adminPassword" type="password" show-password placeholder="可选，用于记录上游站点的登录密码" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="currentSite.remark" type="textarea" :rows="2" placeholder="可选" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -266,7 +275,7 @@ const defaultYellowBalanceThreshold = 500
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const editIndex = ref(-1)
-const currentSite = ref({ channelId: 0, status: 0, name: '', url: '', adapter: '', token: '', userId: '' })
+const currentSite = ref({ channelId: 0, status: 0, name: '', url: '', adapter: '', token: '', userId: '', adminAccount: '', adminPassword: '', remark: '' })
 
 const importDialogVisible = ref(false)
 const importSiteId = ref('')
@@ -375,7 +384,10 @@ const syncToServer = async () => {
       url: s.url,
       adapter: s.adapter || '',
       token: s.token,
-      userId: s.userId
+      userId: s.userId,
+      adminAccount: s.adminAccount || '',
+      adminPassword: s.adminPassword || '',
+      remark: s.remark || ''
     }))
     await axios.post('/api/sites', listToSave, {
       headers: authHeaders()
