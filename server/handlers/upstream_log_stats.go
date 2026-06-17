@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,12 +21,16 @@ import (
 )
 
 const (
-	logStatsPageSize    = 100
-	logStatsConcurrency = 5
-	logStatsTimeout     = 5 * time.Minute
+	logStatsPageSize = 100
+	logStatsTimeout  = 10 * time.Minute
 )
 
-var logStatsHTTPClient = &http.Client{Timeout: 2 * time.Minute}
+var logStatsHTTPClient = &http.Client{
+	Timeout: 2 * time.Minute,
+	Transport: &http.Transport{
+		DisableKeepAlives: true,
+	},
+}
 
 type upstreamLogResponse struct {
 	Data struct {
@@ -52,14 +57,14 @@ type upstreamLogItem struct {
 }
 
 type logGroupStats struct {
-	Group        string           `json:"group"`
-	SuccessCount int              `json:"successCount"`
-	ErrorCount   int              `json:"errorCount"`
-	TotalCount   int              `json:"totalCount"`
-	SuccessRate  float64          `json:"successRate"`
-	TotalQuota   int64            `json:"totalQuota"`
-	AvgUseTime   float64          `json:"avgUseTime"`
-	Models       []logModelStats  `json:"models"`
+	Group        string          `json:"group"`
+	SuccessCount int             `json:"successCount"`
+	ErrorCount   int             `json:"errorCount"`
+	TotalCount   int             `json:"totalCount"`
+	SuccessRate  float64         `json:"successRate"`
+	TotalQuota   int64           `json:"totalQuota"`
+	AvgUseTime   float64         `json:"avgUseTime"`
+	Models       []logModelStats `json:"models"`
 	modelMap     map[string]*logModelStats
 	totalUseTime int64
 }
@@ -75,8 +80,8 @@ type logModelStats struct {
 }
 
 type errorCodeStats struct {
-	StatusCode string `json:"statusCode"`
-	Count      int    `json:"count"`
+	StatusCode string  `json:"statusCode"`
+	Count      int     `json:"count"`
 	Percent    float64 `json:"percent"`
 }
 
@@ -95,77 +100,51 @@ type logStatsResponse struct {
 	Warnings     []string         `json:"warnings,omitempty"`
 }
 
-func fetchUpstreamLogPage(ctx context.Context, baseURL, token, userID string,
-	page, pageSize, logType int, startTS, endTS, group string) ([]upstreamLogItem, int, error) {
+func fetchLogPage(ctx context.Context, baseURL, token, userID string,
+	page, pageSize int, startTS, endTS, group string) ([]upstreamLogItem, error) {
 
-	targetURL := fmt.Sprintf("%s/api/log/?p=%d&page_size=%d&type=%d&start_timestamp=%s&end_timestamp=%s",
-		baseURL, page, pageSize, logType, startTS, endTS)
+	targetURL := fmt.Sprintf("%s/api/log/?p=%d&page_size=%d&start_timestamp=%s&end_timestamp=%s",
+		baseURL, page, pageSize, startTS, endTS)
 	if group != "" {
 		targetURL += "&group=" + url.QueryEscape(group)
 	}
 
-	const maxRetries = 3
-	var lastErr error
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		if attempt > 1 {
-			delay := time.Duration(attempt) * 2 * time.Second
-			log.Printf("[upstream-log-stats] type=%d page %d: retry %d/%d after %v", logType, page, attempt, maxRetries, delay)
-			select {
-			case <-ctx.Done():
-				return nil, 0, ctx.Err()
-			case <-time.After(delay):
-			}
-		}
+	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
-		reqCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, targetURL, nil)
-		if err != nil {
-			cancel()
-			return nil, 0, fmt.Errorf("build request: %w", err)
-		}
-		req.Header.Set("Authorization", normalizeBearerToken(token))
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36")
-		req.Header.Set("Accept", "application/json, text/plain, */*")
-		req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-		if userID != "" {
-			req.Header.Set("New-Api-User", userID)
-		}
-
-		resp, err := logStatsHTTPClient.Do(req)
-		if err != nil {
-			cancel()
-			lastErr = fmt.Errorf("http request: %w", err)
-			continue
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		cancel()
-
-		if err != nil {
-			lastErr = fmt.Errorf("read body: %w", err)
-			continue
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("upstream HTTP %d", resp.StatusCode)
-			continue
-		}
-
-		var result upstreamLogResponse
-		if err := json.Unmarshal(body, &result); err != nil {
-			return nil, 0, fmt.Errorf("json parse: %w", err)
-		}
-
-		totalCount := result.Data.TotalCount
-		if totalCount == 0 {
-			totalCount = result.Data.Total
-		}
-
-		return result.Data.Items, totalCount, nil
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", normalizeBearerToken(token))
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	if userID != "" {
+		req.Header.Set("New-Api-User", userID)
 	}
 
-	return nil, 0, lastErr
+	resp, err := logStatsHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("upstream HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+
+	var result upstreamLogResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("json parse: %w", err)
+	}
+
+	return result.Data.Items, nil
 }
 
 func QueryUpstreamLogStatsHandler(c *gin.Context) {
@@ -180,10 +159,20 @@ func QueryUpstreamLogStatsHandler(c *gin.Context) {
 		return
 	}
 
-	startTS := strings.TrimSpace(c.Query("start_timestamp"))
-	endTS := strings.TrimSpace(c.Query("end_timestamp"))
-	if startTS == "" || endTS == "" {
+	startTSStr := strings.TrimSpace(c.Query("start_timestamp"))
+	endTSStr := strings.TrimSpace(c.Query("end_timestamp"))
+	if startTSStr == "" || endTSStr == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少时间范围参数"})
+		return
+	}
+	startTSInt, err := strconv.ParseInt(startTSStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "start_timestamp 格式错误"})
+		return
+	}
+	endTSInt, err := strconv.ParseInt(endTSStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "end_timestamp 格式错误"})
 		return
 	}
 
@@ -216,66 +205,76 @@ func QueryUpstreamLogStatsHandler(c *gin.Context) {
 	userID := strings.TrimSpace(site.UserID)
 	groupFilter := strings.TrimSpace(c.Query("group"))
 
+	const (
+		sliceDuration  int64 = 5 * 60 // 5 minutes
+		maxConcurrency       = 20
+		maxPagesPerSlice     = 10
+	)
+
+	type timeSlice struct{ start, end int64 }
+	var slices []timeSlice
+	for s := startTSInt; s < endTSInt; s += sliceDuration {
+		e := s + sliceDuration
+		if e > endTSInt {
+			e = endTSInt
+		}
+		slices = append(slices, timeSlice{s, e})
+	}
+
 	startTime := time.Now()
-	itemsCh := make(chan []upstreamLogItem, 100)
+	log.Printf("[upstream-log-stats] %d time slices (%ds each), concurrency=%d, group=%q",
+		len(slices), sliceDuration, maxConcurrency, groupFilter)
+
+	itemsCh := make(chan []upstreamLogItem, len(slices))
+	sem := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
 	var fetchErrors []string
 	var mu sync.Mutex
 	var totalFetchedPages int64
-	sem := make(chan struct{}, logStatsConcurrency)
+	var completedSlices int64
 
-	for _, logType := range []int{2, 5} {
+	for _, sl := range slices {
 		wg.Add(1)
-		go func(lt int) {
+		go func(s timeSlice) {
 			defer wg.Done()
-
 			sem <- struct{}{}
-			items, totalCount, err := fetchUpstreamLogPage(ctx, baseURL, token, userID, 1, logStatsPageSize, lt, startTS, endTS, groupFilter)
-			<-sem
-			if err != nil {
-				mu.Lock()
-				fetchErrors = append(fetchErrors, fmt.Sprintf("type=%d page 1: %v", lt, err))
-				mu.Unlock()
-				log.Printf("[upstream-log-stats] type=%d page 1 error: %v", lt, err)
-				return
-			}
-			atomic.AddInt64(&totalFetchedPages, 1)
-			log.Printf("[upstream-log-stats] type=%d page 1: got %d items, totalCount=%d", lt, len(items), totalCount)
-			if len(items) > 0 {
-				itemsCh <- items
-			}
+			defer func() { <-sem }()
 
-			effectivePageSize := len(items)
-			if effectivePageSize == 0 || totalCount <= effectivePageSize {
-				return
-			}
+			slStart := strconv.FormatInt(s.start, 10)
+			slEnd := strconv.FormatInt(s.end, 10)
 
-			totalPages := (totalCount + effectivePageSize - 1) / effectivePageSize
-			log.Printf("[upstream-log-stats] type=%d total_count=%d effectivePageSize=%d pages=%d", lt, totalCount, effectivePageSize, totalPages)
-
-			var innerWg sync.WaitGroup
-			for p := 2; p <= totalPages; p++ {
-				innerWg.Add(1)
-				go func(page int) {
-					defer innerWg.Done()
-					sem <- struct{}{}
-					defer func() { <-sem }()
-
-					pageItems, _, err := fetchUpstreamLogPage(ctx, baseURL, token, userID, page, logStatsPageSize, lt, startTS, endTS, groupFilter)
-					if err != nil {
-						mu.Lock()
-						fetchErrors = append(fetchErrors, fmt.Sprintf("type=%d page %d: %v", lt, page, err))
-						mu.Unlock()
-						return
+			for p := 1; p <= maxPagesPerSlice; p++ {
+				items, err := fetchLogPage(ctx, baseURL, token, userID, p, logStatsPageSize, slStart, slEnd, groupFilter)
+				if err != nil {
+					mu.Lock()
+					fetchErrors = append(fetchErrors, fmt.Sprintf("slice %s-%s p%d: %v", slStart, slEnd, p, err))
+					mu.Unlock()
+					return
+				}
+				atomic.AddInt64(&totalFetchedPages, 1)
+				if len(items) == 0 {
+					break
+				}
+				var filtered []upstreamLogItem
+				for i := range items {
+					if items[i].Type == 2 || items[i].Type == 5 {
+						filtered = append(filtered, items[i])
 					}
-					atomic.AddInt64(&totalFetchedPages, 1)
-					if len(pageItems) > 0 {
-						itemsCh <- pageItems
-					}
-				}(p)
+				}
+				if len(filtered) > 0 {
+					itemsCh <- filtered
+				}
+				if len(items) < logStatsPageSize {
+					break
+				}
 			}
-			innerWg.Wait()
-		}(logType)
+
+			done := atomic.AddInt64(&completedSlices, 1)
+			if done%50 == 0 || done == int64(len(slices)) {
+				log.Printf("[upstream-log-stats] progress: %d/%d slices done, %d pages fetched",
+					done, len(slices), atomic.LoadInt64(&totalFetchedPages))
+			}
+		}(sl)
 	}
 
 	go func() {
@@ -386,8 +385,8 @@ func QueryUpstreamLogStatsHandler(c *gin.Context) {
 	}
 
 	elapsed := time.Since(startTime).Milliseconds()
-	log.Printf("[upstream-log-stats] done: %d records, %d groups, %d pages fetched in %dms",
-		totalRecords, len(groups), totalFetchedPages, elapsed)
+	log.Printf("[upstream-log-stats] done: %d records, %d groups, %d pages in %dms (%d slices)",
+		totalRecords, len(groups), totalFetchedPages, elapsed, len(slices))
 
 	c.JSON(http.StatusOK, logStatsResponse{
 		Groups:       groups,
