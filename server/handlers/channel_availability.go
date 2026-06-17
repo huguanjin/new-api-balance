@@ -1516,38 +1516,44 @@ type globalSiteNotifyResult struct {
 }
 
 func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
+	valCtx, valCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer valCancel()
 
-	globalConfig, _, _ := loadChannelAvailabilityGlobalNotifyConfig(ctx)
+	globalConfig, _, _ := loadChannelAvailabilityGlobalNotifyConfig(valCtx)
 	alwaysNotify := globalConfig.AlwaysNotify
 
-	cursor, err := ChannelAvailabilityNotifyCol.Find(ctx, bson.M{"enabled": true})
+	cursor, err := ChannelAvailabilityNotifyCol.Find(valCtx, bson.M{"enabled": true})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询站点配置失败"})
 		return
 	}
-	defer cursor.Close(ctx)
 
-	type groupResultJSON struct {
-		SiteName  string `json:"siteName"`
-		GroupName string `json:"groupName"`
-		Tested    int    `json:"tested"`
-		Success   int    `json:"success"`
-		Fail      int    `json:"fail"`
-		Error     string `json:"error,omitempty"`
+	var configs []models.ChannelAvailabilityNotifyConfig
+	if err := cursor.All(valCtx, &configs); err != nil {
+		cursor.Close(valCtx)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取站点配置失败"})
+		return
+	}
+	cursor.Close(valCtx)
+
+	if len(configs) == 0 {
+		c.JSON(http.StatusOK, gin.H{"message": "没有已启用的站点推送配置", "results": []struct{}{}})
+		return
 	}
 
-	var siteNotifyResults []globalSiteNotifyResult
-	var jsonResults []groupResultJSON
+	c.JSON(http.StatusAccepted, gin.H{"message": fmt.Sprintf("全局推送任务已开始执行（%d 个站点），完成后将发送通知", len(configs))})
 
+	go runChannelAvailabilityGlobalNotifyAsync(configs, alwaysNotify)
+}
+
+func runChannelAvailabilityGlobalNotifyAsync(configs []models.ChannelAvailabilityNotifyConfig, alwaysNotify bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	var siteNotifyResults []globalSiteNotifyResult
 	cleanTestResults(ctx, "")
 
-	for cursor.Next(ctx) {
-		var config models.ChannelAvailabilityNotifyConfig
-		if err := cursor.Decode(&config); err != nil {
-			continue
-		}
+	for _, config := range configs {
 		if config.UpstreamSiteID.IsZero() {
 			continue
 		}
@@ -1574,9 +1580,7 @@ func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
 
 		cred, credErr := resolveCredentialsFromSite(ctx, siteID)
 		if credErr != nil {
-			for _, g := range config.MonitoringGroups {
-				jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: g.Name, Error: credErr.Error()})
-			}
+			log.Printf("[global-notify-run] 解析凭据失败 site=%s: %s", siteID.Hex(), credErr.Error())
 			continue
 		}
 
@@ -1585,24 +1589,18 @@ func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
 			channelURL := cred.BaseURL + "/api/channel/"
 			freshItems, fetchErr := fetchAllUpstreamChannelItems(ctx, channelURL, cred.Token, cred.UserID)
 			if fetchErr != nil {
-				for _, g := range config.MonitoringGroups {
-					jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: g.Name, Error: fmt.Sprintf("拉取渠道失败: %s", fetchErr.Error())})
-				}
+				log.Printf("[global-notify-run] 拉取渠道失败 site=%s: %s", siteID.Hex(), fetchErr.Error())
 				continue
 			}
 			if err := saveUpstreamChannels(ctx, freshItems, siteID); err != nil {
-				for _, g := range config.MonitoringGroups {
-					jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: g.Name, Error: "保存渠道失败"})
-				}
+				log.Printf("[global-notify-run] 保存渠道失败 site=%s: %s", siteID.Hex(), err.Error())
 				continue
 			}
 		}
 
 		storedChannels, scErr := listUpstreamChannels(ctx, siteID)
 		if scErr != nil {
-			for _, g := range config.MonitoringGroups {
-				jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: g.Name, Error: "读取渠道失败"})
-			}
+			log.Printf("[global-notify-run] 读取渠道失败 site=%s: %s", siteID.Hex(), scErr.Error())
 			continue
 		}
 		upstreamIDSet := make(map[int]bool, len(storedChannels))
@@ -1632,33 +1630,32 @@ func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
 			}
 			channelCursor, chErr := UpstreamChannelCol.Find(ctx, filter)
 			if chErr != nil {
-				jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: group.Name, Error: "查询渠道失败"})
+				log.Printf("[global-notify-run] 查询渠道失败 group=%s: %s", group.Name, chErr.Error())
 				continue
 			}
 			var targetChannels []models.UpstreamChannel
 			if err := channelCursor.All(ctx, &targetChannels); err != nil {
 				channelCursor.Close(ctx)
-				jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: group.Name, Error: "解析渠道失败"})
+				log.Printf("[global-notify-run] 解析渠道失败 group=%s: %s", group.Name, err.Error())
 				continue
 			}
 			channelCursor.Close(ctx)
 
 			if len(targetChannels) == 0 {
-				jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: group.Name})
 				continue
 			}
 
 			skipCodes := resolveGroupSkipStatusCodes(group, cred)
 			runID := fmt.Sprintf("global-%d-%s-%d", time.Now().UnixNano(), siteID.Hex(), gi)
 			if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, skipCodes, group.AnyModelSuccess); err != nil {
-				jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: group.Name, Error: "测试结果写入失败"})
+				log.Printf("[global-notify-run] 测试结果写入失败 group=%s: %s", group.Name, err.Error())
 				continue
 			}
 
 			classified, classErr := classifyTestResults(ctx, runID, group.SlowThresholdMs)
 			if classErr != nil {
 				cleanTestResults(ctx, runID)
-				jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: group.Name, Error: "读取测试结果失败"})
+				log.Printf("[global-notify-run] 读取测试结果失败 group=%s: %s", group.Name, classErr.Error())
 				continue
 			}
 
@@ -1698,47 +1695,22 @@ func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
 					SuccessCount:    classified.SuccessCount,
 				})
 			}
-
-			jsonResults = append(jsonResults, groupResultJSON{
-				SiteName:  siteName,
-				GroupName: group.Name,
-				Tested:    len(classified.All),
-				Success:   classified.SuccessCount,
-				Fail:      len(classified.All) - classified.SuccessCount,
-			})
 		}
 	}
 
-	if len(jsonResults) == 0 {
-		c.JSON(http.StatusOK, gin.H{"message": "没有已启用的站点推送配置", "results": []groupResultJSON{}})
-		return
-	}
-
-	notified := false
 	if len(siteNotifyResults) > 0 {
 		card := buildGlobalAvailabilityNotifyCard(siteNotifyResults)
 		msg := buildGlobalAvailabilityNotifyMessage(siteNotifyResults)
 		nType, webhookURL, signKey, resolveErr := resolveGlobalNotifyWebhook(ctx)
 		if resolveErr == nil {
 			if err := sendAvailabilityCardNotification(ctx, nType, webhookURL, signKey, card, msg); err != nil {
-				log.Printf("[channel-availability-global-run] send combined notification error: %v", err)
-			} else {
-				notified = true
+				log.Printf("[global-notify-run] 推送通知失败: %v", err)
 			}
 		} else {
-			log.Printf("[channel-availability-global-run] resolve webhook error: %v", resolveErr)
+			log.Printf("[global-notify-run] 解析 webhook 失败: %v", resolveErr)
 		}
 	}
-
-	totalTested := 0
-	for _, r := range jsonResults {
-		totalTested += r.Tested
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"message":  fmt.Sprintf("共处理 %d 个监测组，测试 %d 个渠道", len(jsonResults), totalTested),
-		"notified": notified,
-		"results":  jsonResults,
-	})
+	log.Printf("[global-notify-run] 完成 sites=%d", len(configs))
 }
 
 func resolveGlobalNotifyWebhook(ctx context.Context) (string, string, string, error) {
@@ -1885,9 +1857,9 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	notifyConfig, err := loadChannelAvailabilityNotifyConfig(ctx, siteID)
+	valCtx, valCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer valCancel()
+	notifyConfig, err := loadChannelAvailabilityNotifyConfig(valCtx, siteID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load notify config"})
 		return
@@ -1896,43 +1868,19 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请先配置监测组"})
 		return
 	}
-	nType, webhookURL, signKey, err := resolveNotifyWebhook(ctx, notifyConfig)
+	nType, webhookURL, signKey, err := resolveNotifyWebhook(valCtx, notifyConfig)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	cred, err := resolveCredentialsFromSite(ctx, siteID)
+	cred, err := resolveCredentialsFromSite(valCtx, siteID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	siteName := ""
-	if site, sErr := loadUpstreamSite(ctx, siteID); sErr == nil {
+	if site, sErr := loadUpstreamSite(valCtx, siteID); sErr == nil {
 		siteName = site.Name
-	}
-
-	shouldRefresh := notifyConfig.RefreshChannels == nil || *notifyConfig.RefreshChannels
-	if shouldRefresh {
-		channelURL := cred.BaseURL + "/api/channel/"
-		freshItems, fetchErr := fetchAllUpstreamChannelItems(ctx, channelURL, cred.Token, cred.UserID)
-		if fetchErr != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("拉取渠道失败: %s", fetchErr.Error())})
-			return
-		}
-		if err := saveUpstreamChannels(ctx, freshItems, siteID); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存渠道失败"})
-			return
-		}
-	}
-
-	storedChannels, err := listUpstreamChannels(ctx, siteID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取渠道失败"})
-		return
-	}
-	upstreamIDSet := make(map[int]bool, len(storedChannels))
-	for _, ch := range storedChannels {
-		upstreamIDSet[ch.ChannelID] = true
 	}
 
 	var groupsToRun []models.MonitoringGroup
@@ -1952,21 +1900,44 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 		}
 	}
 
-	type groupResultJSON struct {
-		GroupName string `json:"groupName"`
-		Tested    int    `json:"tested"`
-		Success   int    `json:"success"`
-		Fail      int    `json:"fail"`
-		Notified  bool   `json:"notified"`
-		Error     string `json:"error,omitempty"`
+	c.JSON(http.StatusAccepted, gin.H{"message": fmt.Sprintf("推送任务已开始执行（%d 个监测组），完成后将发送通知", len(groupsToRun))})
+
+	go runChannelAvailabilityNotifyAsync(notifyConfig, siteID, siteName, nType, webhookURL, signKey, cred, groupsToRun, groupIndices)
+}
+
+func runChannelAvailabilityNotifyAsync(notifyConfig models.ChannelAvailabilityNotifyConfig, siteID primitive.ObjectID, siteName, nType, webhookURL, signKey string, cred availabilityCredentials, groupsToRun []models.MonitoringGroup, groupIndices []int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	shouldRefresh := notifyConfig.RefreshChannels == nil || *notifyConfig.RefreshChannels
+	if shouldRefresh {
+		channelURL := cred.BaseURL + "/api/channel/"
+		freshItems, fetchErr := fetchAllUpstreamChannelItems(ctx, channelURL, cred.Token, cred.UserID)
+		if fetchErr != nil {
+			log.Printf("[notify-run] 拉取渠道失败 site=%s: %s", siteID.Hex(), fetchErr.Error())
+			return
+		}
+		if err := saveUpstreamChannels(ctx, freshItems, siteID); err != nil {
+			log.Printf("[notify-run] 保存渠道失败 site=%s: %s", siteID.Hex(), err.Error())
+			return
+		}
 	}
-	var groupResults []groupResultJSON
+
+	storedChannels, err := listUpstreamChannels(ctx, siteID)
+	if err != nil {
+		log.Printf("[notify-run] 读取渠道失败 site=%s: %s", siteID.Hex(), err.Error())
+		return
+	}
+	upstreamIDSet := make(map[int]bool, len(storedChannels))
+	for _, ch := range storedChannels {
+		upstreamIDSet[ch.ChannelID] = true
+	}
+
 	cleanTestResults(ctx, "")
 
 	for idx, group := range groupsToRun {
 		gi := groupIndices[idx]
 		if len(group.ChannelIDs) == 0 {
-			groupResults = append(groupResults, groupResultJSON{GroupName: group.Name, Error: "无生效渠道 ID"})
 			continue
 		}
 
@@ -1988,19 +1959,18 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 		}
 		cursor, chErr := UpstreamChannelCol.Find(ctx, filter)
 		if chErr != nil {
-			groupResults = append(groupResults, groupResultJSON{GroupName: group.Name, Error: "查询渠道失败"})
+			log.Printf("[notify-run] 查询渠道失败 group=%s: %s", group.Name, chErr.Error())
 			continue
 		}
 		var targetChannels []models.UpstreamChannel
 		if err := cursor.All(ctx, &targetChannels); err != nil {
 			cursor.Close(ctx)
-			groupResults = append(groupResults, groupResultJSON{GroupName: group.Name, Error: "解析渠道失败"})
+			log.Printf("[notify-run] 解析渠道失败 group=%s: %s", group.Name, err.Error())
 			continue
 		}
 		cursor.Close(ctx)
 
 		if len(targetChannels) == 0 {
-			groupResults = append(groupResults, groupResultJSON{GroupName: group.Name})
 			continue
 		}
 
@@ -2012,14 +1982,14 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 		skipCodes := resolveGroupSkipStatusCodes(group, cred)
 		runID := fmt.Sprintf("notify-%d-%d", time.Now().UnixNano(), gi)
 		if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, skipCodes, group.AnyModelSuccess); err != nil {
-			groupResults = append(groupResults, groupResultJSON{GroupName: group.Name, Error: "测试结果写入失败"})
+			log.Printf("[notify-run] 测试结果写入失败 group=%s: %s", group.Name, err.Error())
 			continue
 		}
 
 		classified, classErr := classifyTestResults(ctx, runID, group.SlowThresholdMs)
 		if classErr != nil {
 			cleanTestResults(ctx, runID)
-			groupResults = append(groupResults, groupResultJSON{GroupName: group.Name, Error: "读取测试结果失败"})
+			log.Printf("[notify-run] 读取测试结果失败 group=%s: %s", group.Name, classErr.Error())
 			continue
 		}
 
@@ -2036,12 +2006,11 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 			}
 		}
 
-		notified := false
 		if len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0 {
 			card := buildAvailabilityNotifyCard(displayName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, group.AutoToggle, group.SlowThresholdMs, toggleResults)
 			msg := buildAvailabilityNotifyMessage(displayName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, group.AutoToggle, group.SlowThresholdMs, toggleResults)
-			if err := sendAvailabilityCardNotification(ctx, nType, webhookURL, signKey, card, msg); err == nil {
-				notified = true
+			if err := sendAvailabilityCardNotification(ctx, nType, webhookURL, signKey, card, msg); err != nil {
+				log.Printf("[notify-run] 推送通知失败 group=%s: %s", group.Name, err.Error())
 			}
 		}
 
@@ -2050,25 +2019,8 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 		_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": notifyConfig.ID}, bson.M{"$set": bson.M{
 			fmt.Sprintf("monitoring_groups.%d.last_attempt_at", gi): nowTs,
 		}})
-
-		failCount := len(classified.All) - classified.SuccessCount
-		groupResults = append(groupResults, groupResultJSON{
-			GroupName: group.Name,
-			Tested:    len(classified.All),
-			Success:   classified.SuccessCount,
-			Fail:      failCount,
-			Notified:  notified,
-		})
 	}
-
-	totalTested := 0
-	for _, r := range groupResults {
-		totalTested += r.Tested
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"message":      fmt.Sprintf("共执行 %d 个监测组，测试 %d 个渠道", len(groupResults), totalTested),
-		"groupResults": groupResults,
-	})
+	log.Printf("[notify-run] 完成 site=%s groups=%d", siteID.Hex(), len(groupsToRun))
 }
 
 func loadChannelAvailabilityNotifyConfig(ctx context.Context, siteID primitive.ObjectID) (models.ChannelAvailabilityNotifyConfig, error) {
