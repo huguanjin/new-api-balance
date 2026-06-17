@@ -1252,7 +1252,8 @@ func GetChannelAvailabilityNotifyConfigHandler(c *gin.Context) {
 	defer cancel()
 	config, err := loadChannelAvailabilityNotifyConfig(ctx, siteID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load notify config"})
+		log.Printf("[channel-availability] load notify config error for site %s: %v", siteIDStr, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to load notify config: %v", err)})
 		return
 	}
 	c.JSON(http.StatusOK, config)
@@ -2080,6 +2081,13 @@ func loadChannelAvailabilityNotifyConfig(ctx context.Context, siteID primitive.O
 		}, nil
 	}
 	if err != nil {
+		log.Printf("[channel-availability] decode notify config error for site %s: %v, attempting raw decode", siteID.Hex(), err)
+		var raw bson.M
+		if rawErr := ChannelAvailabilityNotifyCol.FindOne(ctx, bson.M{"upstream_site_id": siteID}).Decode(&raw); rawErr == nil {
+			config = rebuildNotifyConfigFromRaw(raw, siteID)
+			log.Printf("[channel-availability] recovered config from raw document for site %s", siteID.Hex())
+			return config, nil
+		}
 		return config, err
 	}
 	if len(config.MonitoringGroups) == 0 && len(config.ChannelIDs) > 0 {
@@ -2101,6 +2109,85 @@ func loadChannelAvailabilityNotifyConfig(ctx context.Context, siteID primitive.O
 		})
 	}
 	return config, nil
+}
+
+func rebuildNotifyConfigFromRaw(raw bson.M, siteID primitive.ObjectID) models.ChannelAvailabilityNotifyConfig {
+	config := models.ChannelAvailabilityNotifyConfig{
+		UpstreamSiteID:   siteID,
+		NotificationType: "feishu",
+	}
+	if id, ok := raw["_id"].(primitive.ObjectID); ok {
+		config.ID = id
+	}
+	if v, ok := raw["enabled"].(bool); ok {
+		config.Enabled = v
+	}
+	if v, ok := raw["notification_type"].(string); ok {
+		config.NotificationType = v
+	}
+	if v, ok := raw["webhook_url"].(string); ok {
+		config.WebhookURL = v
+	}
+	if v, ok := raw["sign_key"].(string); ok {
+		config.SignKey = v
+	}
+	if v, ok := raw["wework_webhook_url"].(string); ok {
+		config.WeworkWebhookURL = v
+	}
+	if v, ok := raw["refresh_channels"].(bool); ok {
+		config.RefreshChannels = &v
+	}
+
+	var channelIDs []int
+	if arr, ok := raw["channel_ids"].(primitive.A); ok {
+		for _, item := range arr {
+			switch v := item.(type) {
+			case int32:
+				channelIDs = append(channelIDs, int(v))
+			case int64:
+				channelIDs = append(channelIDs, int(v))
+			case float64:
+				channelIDs = append(channelIDs, int(v))
+			}
+		}
+	}
+
+	if len(channelIDs) > 0 {
+		autoToggle := false
+		if v, ok := raw["auto_toggle"].(bool); ok {
+			autoToggle = v
+		}
+		statusFilter := 0
+		if v, ok := raw["status_filter"].(int32); ok {
+			statusFilter = int(v)
+		} else if v, ok := raw["status_filter"].(int64); ok {
+			statusFilter = int(v)
+		}
+		slowThresholdMs := 0
+		if v, ok := raw["slow_threshold_ms"].(int32); ok {
+			slowThresholdMs = int(v)
+		} else if v, ok := raw["slow_threshold_ms"].(int64); ok {
+			slowThresholdMs = int(v)
+		}
+		config.MonitoringGroups = []models.MonitoringGroup{{
+			Name:            "默认组",
+			ChannelIDs:      channelIDs,
+			StatusFilter:    statusFilter,
+			AutoToggle:      autoToggle,
+			SlowThresholdMs: slowThresholdMs,
+		}}
+	}
+
+	log.Printf("[channel-availability] raw doc fields: %v", rawDocKeys(raw))
+	return config
+}
+
+func rawDocKeys(doc bson.M) []string {
+	keys := make([]string, 0, len(doc))
+	for k := range doc {
+		keys = append(keys, fmt.Sprintf("%s(%T)", k, doc[k]))
+	}
+	return keys
 }
 
 func resolveNotifyWebhook(ctx context.Context, config models.ChannelAvailabilityNotifyConfig) (string, string, string, error) {
