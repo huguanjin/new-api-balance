@@ -202,7 +202,7 @@ func TestChannelAvailabilityHandler(c *gin.Context) {
 	testModel := strings.TrimSpace(req.TestModel)
 	runID := fmt.Sprintf("test-%d", time.Now().UnixNano())
 	cleanTestResults(ctx, "")
-	if err := batchTestChannels(ctx, channels, cred.BaseURL, cred.Token, cred.UserID, testModel, runID, cred.SkipStatusCodes); err != nil {
+	if err := batchTestChannels(ctx, channels, cred.BaseURL, cred.Token, cred.UserID, testModel, runID, cred.SkipStatusCodes, false); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "测试结果写入失败"})
 		return
 	}
@@ -261,7 +261,7 @@ func TestSingleChannelAvailabilityHandler(c *gin.Context) {
 	}
 
 	testModel := strings.TrimSpace(req.TestModel)
-	result := testOneChannel(ctx, channel, cred.BaseURL, cred.Token, cred.UserID, testModel, cred.SkipStatusCodes)
+	result := testOneChannel(ctx, channel, cred.BaseURL, cred.Token, cred.UserID, testModel, cred.SkipStatusCodes, false)
 
 	now := time.Now()
 	update := bson.M{
@@ -531,19 +531,25 @@ func removeChannelIDsFromNotifyConfig(ctx context.Context, idsToRemove []int) {
 		if err := cursor.Decode(&config); err != nil {
 			continue
 		}
-		if len(config.ChannelIDs) == 0 {
-			continue
-		}
-		cleaned := make([]int, 0, len(config.ChannelIDs))
-		for _, id := range config.ChannelIDs {
-			if _, ok := removeSet[id]; !ok {
-				cleaned = append(cleaned, id)
+		changed := false
+		for gi, group := range config.MonitoringGroups {
+			if len(group.ChannelIDs) == 0 {
+				continue
+			}
+			cleaned := make([]int, 0, len(group.ChannelIDs))
+			for _, id := range group.ChannelIDs {
+				if _, ok := removeSet[id]; !ok {
+					cleaned = append(cleaned, id)
+				}
+			}
+			if len(cleaned) != len(group.ChannelIDs) {
+				config.MonitoringGroups[gi].ChannelIDs = cleaned
+				changed = true
 			}
 		}
-		if len(cleaned) == len(config.ChannelIDs) {
-			continue
+		if changed {
+			_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": config.ID}, bson.M{"$set": bson.M{"monitoring_groups": config.MonitoringGroups}})
 		}
-		_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": config.ID}, bson.M{"$set": bson.M{"channel_ids": cleaned}})
 	}
 }
 
@@ -941,7 +947,7 @@ func listUpstreamChannels(ctx context.Context, siteID primitive.ObjectID) ([]mod
 	return channels, nil
 }
 
-func batchTestChannels(ctx context.Context, channels []models.UpstreamChannel, baseURL, token, userID, testModel, runID string, skipStatusCodes []int) error {
+func batchTestChannels(ctx context.Context, channels []models.UpstreamChannel, baseURL, token, userID, testModel, runID string, skipStatusCodes []int, anyModelSuccess bool) error {
 	sem := make(chan struct{}, channelTestConcurrency)
 	var wg sync.WaitGroup
 	var firstErr error
@@ -954,7 +960,7 @@ func batchTestChannels(ctx context.Context, channels []models.UpstreamChannel, b
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			result := testOneChannel(ctx, channel, baseURL, token, userID, testModel, skipStatusCodes)
+			result := testOneChannel(ctx, channel, baseURL, token, userID, testModel, skipStatusCodes, anyModelSuccess)
 
 			now := time.Now()
 			update := bson.M{
@@ -1076,7 +1082,7 @@ func classifyTestResults(ctx context.Context, runID string, slowThresholdMs int)
 	return cr, nil
 }
 
-func testOneChannel(ctx context.Context, channel models.UpstreamChannel, baseURL, token, userID, testModel string, skipStatusCodes []int) channelTestResult {
+func testOneChannel(ctx context.Context, channel models.UpstreamChannel, baseURL, token, userID, testModel string, skipStatusCodes []int, anyModelSuccess bool) channelTestResult {
 	result := channelTestResult{
 		ChannelID: channel.ChannelID,
 		Name:      channel.Name,
@@ -1114,12 +1120,15 @@ func testOneChannel(ctx context.Context, channel models.UpstreamChannel, baseURL
 	}
 
 	details := make([]channelModelTestDetail, len(modelsToTest))
+	hasSuccess := false
 	allSuccess := true
 	maxResponseTime := 0
 	var failErrors []string
 	for i, m := range modelsToTest {
 		details[i] = testSingleModel(ctx, channel.ChannelID, m, baseURL, token, userID, skipStatusCodes)
-		if !details[i].Success {
+		if details[i].Success {
+			hasSuccess = true
+		} else {
 			allSuccess = false
 			failErrors = append(failErrors, fmt.Sprintf("%s: %s", m, details[i].Error))
 		}
@@ -1129,9 +1138,13 @@ func testOneChannel(ctx context.Context, channel models.UpstreamChannel, baseURL
 	}
 
 	result.ModelResults = details
-	result.Success = allSuccess
+	if anyModelSuccess {
+		result.Success = hasSuccess
+	} else {
+		result.Success = allSuccess
+	}
 	result.ResponseTime = maxResponseTime
-	if !allSuccess {
+	if !result.Success {
 		result.Error = strings.Join(failErrors, "; ")
 	}
 	return result
@@ -1311,18 +1324,23 @@ func SaveChannelAvailabilityGlobalNotifyConfigHandler(c *gin.Context) {
 
 func SaveChannelAvailabilityNotifyConfigHandler(c *gin.Context) {
 	var req struct {
-		UpstreamSiteID   string                       `json:"upstreamSiteId"`
-		Enabled          bool                         `json:"enabled"`
-		NotificationType string                       `json:"notificationType"`
-		WebhookURL       string                       `json:"webhookUrl"`
-		SignKey          string                       `json:"signKey"`
-		WeworkWebhookURL string                       `json:"weworkWebhookUrl"`
-		ChannelIDs       []int                        `json:"channelIds"`
-		StatusFilter     int                          `json:"statusFilter"`
-		RefreshChannels  *bool                        `json:"refreshChannels"`
-		AutoToggle       bool                         `json:"autoToggle"`
-		SlowThresholdMs  int                          `json:"slowThresholdMs"`
-		Schedules        []models.NotificationSchedule `json:"schedules"`
+		UpstreamSiteID   string                        `json:"upstreamSiteId"`
+		Enabled          bool                          `json:"enabled"`
+		NotificationType string                        `json:"notificationType"`
+		WebhookURL       string                        `json:"webhookUrl"`
+		SignKey          string                        `json:"signKey"`
+		WeworkWebhookURL string                        `json:"weworkWebhookUrl"`
+		RefreshChannels  *bool                         `json:"refreshChannels"`
+		MonitoringGroups []struct {
+			Name            string                        `json:"name"`
+			ChannelIDs      []int                         `json:"channelIds"`
+			StatusFilter    int                           `json:"statusFilter"`
+			AutoToggle      bool                          `json:"autoToggle"`
+			AnyModelSuccess bool                          `json:"anyModelSuccess"`
+			SlowThresholdMs int                           `json:"slowThresholdMs"`
+			SkipStatusCodes []int                         `json:"skipStatusCodes"`
+			Schedules       []models.NotificationSchedule `json:"schedules"`
+		} `json:"monitoringGroups"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
@@ -1333,17 +1351,51 @@ func SaveChannelAvailabilityNotifyConfigHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择上游站点"})
 		return
 	}
-	if len(req.ChannelIDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请配置至少一个生效渠道 ID"})
+	if len(req.MonitoringGroups) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请至少配置一个监测组"})
 		return
 	}
+	var groups []models.MonitoringGroup
+	for i, g := range req.MonitoringGroups {
+		name := strings.TrimSpace(g.Name)
+		if name == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("监测组 %d 名称不能为空", i+1)})
+			return
+		}
+		if len(g.ChannelIDs) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("监测组「%s」至少需要一个生效渠道 ID", name)})
+			return
+		}
+		schedules := normalizeNotificationSchedules(g.Schedules)
+		if err := validateNotificationSchedules(schedules); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("监测组「%s」推送计划错误: %s", name, err.Error())})
+			return
+		}
+		groups = append(groups, models.MonitoringGroup{
+			Name:            name,
+			ChannelIDs:      g.ChannelIDs,
+			StatusFilter:    g.StatusFilter,
+			AutoToggle:      g.AutoToggle,
+			AnyModelSuccess: g.AnyModelSuccess,
+			SlowThresholdMs: g.SlowThresholdMs,
+			SkipStatusCodes: g.SkipStatusCodes,
+			Schedules:       schedules,
+		})
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req.Schedules = normalizeNotificationSchedules(req.Schedules)
-	if err := validateNotificationSchedules(req.Schedules); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+
+	existing, _ := loadChannelAvailabilityNotifyConfig(ctx, siteID)
+	for i := range groups {
+		for _, old := range existing.MonitoringGroups {
+			if old.Name == groups[i].Name && old.LastAttemptAt != nil {
+				groups[i].LastAttemptAt = old.LastAttemptAt
+				break
+			}
+		}
 	}
+
 	now := time.Now()
 	update := bson.M{
 		"upstream_site_id":   siteID,
@@ -1352,16 +1404,20 @@ func SaveChannelAvailabilityNotifyConfigHandler(c *gin.Context) {
 		"webhook_url":        strings.TrimSpace(req.WebhookURL),
 		"sign_key":           strings.TrimSpace(req.SignKey),
 		"wework_webhook_url": strings.TrimSpace(req.WeworkWebhookURL),
-		"channel_ids":        req.ChannelIDs,
-		"status_filter":      req.StatusFilter,
 		"refresh_channels":   req.RefreshChannels,
-		"auto_toggle":        req.AutoToggle,
-		"slow_threshold_ms":  req.SlowThresholdMs,
-		"schedules":          req.Schedules,
+		"monitoring_groups":  groups,
 		"updated_at":         now,
 	}
+	unset := bson.M{
+		"channel_ids":      "",
+		"schedules":        "",
+		"last_attempt_at":  "",
+		"status_filter":    "",
+		"auto_toggle":      "",
+		"slow_threshold_ms": "",
+	}
 	opts := options.Update().SetUpsert(true)
-	if _, err := ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"upstream_site_id": siteID}, bson.M{"$set": update}, opts); err != nil {
+	if _, err := ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"upstream_site_id": siteID}, bson.M{"$set": update, "$unset": unset}, opts); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save notify config"})
 		return
 	}
@@ -1443,16 +1499,19 @@ func TestChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
 }
 
 type globalSiteNotifyResult struct {
-	SiteName       string
-	Config         models.ChannelAvailabilityNotifyConfig
-	All            []channelTestResult
-	EnabledFailed  []channelTestResult
+	SiteName        string
+	GroupName       string
+	Config          models.ChannelAvailabilityNotifyConfig
+	AutoToggle      bool
+	SlowThresholdMs int
+	All             []channelTestResult
+	EnabledFailed   []channelTestResult
 	DisabledSuccess []channelTestResult
-	EnabledSlow    []channelTestResult
-	MissingIDs     []int
-	ToggleResults  []channelStatusChangeResult
-	SuccessCount   int
-	Error          string
+	EnabledSlow     []channelTestResult
+	MissingIDs      []int
+	ToggleResults   []channelStatusChangeResult
+	SuccessCount    int
+	Error           string
 }
 
 func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
@@ -1469,16 +1528,17 @@ func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
 	}
 	defer cursor.Close(ctx)
 
-	type siteResultJSON struct {
-		SiteName string `json:"siteName"`
-		Tested   int    `json:"tested"`
-		Success  int    `json:"success"`
-		Fail     int    `json:"fail"`
-		Error    string `json:"error,omitempty"`
+	type groupResultJSON struct {
+		SiteName  string `json:"siteName"`
+		GroupName string `json:"groupName"`
+		Tested    int    `json:"tested"`
+		Success   int    `json:"success"`
+		Fail      int    `json:"fail"`
+		Error     string `json:"error,omitempty"`
 	}
 
 	var siteNotifyResults []globalSiteNotifyResult
-	var jsonResults []siteResultJSON
+	var jsonResults []groupResultJSON
 
 	cleanTestResults(ctx, "")
 
@@ -1487,8 +1547,19 @@ func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
 		if err := cursor.Decode(&config); err != nil {
 			continue
 		}
-		if len(config.ChannelIDs) == 0 || config.UpstreamSiteID.IsZero() {
+		if config.UpstreamSiteID.IsZero() {
 			continue
+		}
+		if len(config.MonitoringGroups) == 0 && len(config.ChannelIDs) > 0 {
+			config.MonitoringGroups = []models.MonitoringGroup{{
+				Name:            "默认组",
+				ChannelIDs:      config.ChannelIDs,
+				StatusFilter:    config.StatusFilter,
+				AutoToggle:      config.AutoToggle,
+				SlowThresholdMs: config.SlowThresholdMs,
+				Schedules:       config.Schedules,
+				LastAttemptAt:   config.LastAttemptAt,
+			}}
 		}
 
 		siteID := config.UpstreamSiteID
@@ -1502,7 +1573,9 @@ func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
 
 		cred, credErr := resolveCredentialsFromSite(ctx, siteID)
 		if credErr != nil {
-			jsonResults = append(jsonResults, siteResultJSON{SiteName: siteName, Error: credErr.Error()})
+			for _, g := range config.MonitoringGroups {
+				jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: g.Name, Error: credErr.Error()})
+			}
 			continue
 		}
 
@@ -1511,113 +1584,132 @@ func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
 			channelURL := cred.BaseURL + "/api/channel/"
 			freshItems, fetchErr := fetchAllUpstreamChannelItems(ctx, channelURL, cred.Token, cred.UserID)
 			if fetchErr != nil {
-				jsonResults = append(jsonResults, siteResultJSON{SiteName: siteName, Error: fmt.Sprintf("拉取渠道失败: %s", fetchErr.Error())})
+				for _, g := range config.MonitoringGroups {
+					jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: g.Name, Error: fmt.Sprintf("拉取渠道失败: %s", fetchErr.Error())})
+				}
 				continue
 			}
 			if err := saveUpstreamChannels(ctx, freshItems, siteID); err != nil {
-				jsonResults = append(jsonResults, siteResultJSON{SiteName: siteName, Error: "保存渠道失败"})
+				for _, g := range config.MonitoringGroups {
+					jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: g.Name, Error: "保存渠道失败"})
+				}
 				continue
 			}
 		}
 
-		storedChannels, err := listUpstreamChannels(ctx, siteID)
-		if err != nil {
-			jsonResults = append(jsonResults, siteResultJSON{SiteName: siteName, Error: "读取渠道失败"})
+		storedChannels, scErr := listUpstreamChannels(ctx, siteID)
+		if scErr != nil {
+			for _, g := range config.MonitoringGroups {
+				jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: g.Name, Error: "读取渠道失败"})
+			}
 			continue
 		}
 		upstreamIDSet := make(map[int]bool, len(storedChannels))
 		for _, ch := range storedChannels {
 			upstreamIDSet[ch.ChannelID] = true
 		}
-		var missingIDs []int
-		var validIDs []int
-		for _, id := range config.ChannelIDs {
-			if upstreamIDSet[id] {
-				validIDs = append(validIDs, id)
-			} else {
-				missingIDs = append(missingIDs, id)
-			}
-		}
 
-		filter := bson.M{"channelId": bson.M{"$in": validIDs}, "upstream_site_id": siteID}
-		if config.StatusFilter == 1 {
-			filter["status"] = 1
-		} else if config.StatusFilter == 2 {
-			filter["status"] = 2
-		}
-		channelCursor, chErr := UpstreamChannelCol.Find(ctx, filter)
-		if chErr != nil {
-			jsonResults = append(jsonResults, siteResultJSON{SiteName: siteName, Error: "查询渠道失败"})
-			continue
-		}
-		var targetChannels []models.UpstreamChannel
-		if err := channelCursor.All(ctx, &targetChannels); err != nil {
+		for gi, group := range config.MonitoringGroups {
+			if len(group.ChannelIDs) == 0 {
+				continue
+			}
+			var missingIDs []int
+			var validIDs []int
+			for _, id := range group.ChannelIDs {
+				if upstreamIDSet[id] {
+					validIDs = append(validIDs, id)
+				} else {
+					missingIDs = append(missingIDs, id)
+				}
+			}
+
+			filter := bson.M{"channelId": bson.M{"$in": validIDs}, "upstream_site_id": siteID}
+			if group.StatusFilter == 1 {
+				filter["status"] = 1
+			} else if group.StatusFilter == 2 {
+				filter["status"] = 2
+			}
+			channelCursor, chErr := UpstreamChannelCol.Find(ctx, filter)
+			if chErr != nil {
+				jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: group.Name, Error: "查询渠道失败"})
+				continue
+			}
+			var targetChannels []models.UpstreamChannel
+			if err := channelCursor.All(ctx, &targetChannels); err != nil {
+				channelCursor.Close(ctx)
+				jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: group.Name, Error: "解析渠道失败"})
+				continue
+			}
 			channelCursor.Close(ctx)
-			jsonResults = append(jsonResults, siteResultJSON{SiteName: siteName, Error: "解析渠道失败"})
-			continue
-		}
-		channelCursor.Close(ctx)
 
-		if len(targetChannels) == 0 {
-			jsonResults = append(jsonResults, siteResultJSON{SiteName: siteName})
-			continue
-		}
-
-		runID := fmt.Sprintf("global-%d-%s", time.Now().UnixNano(), siteID.Hex())
-		if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, cred.SkipStatusCodes); err != nil {
-			jsonResults = append(jsonResults, siteResultJSON{SiteName: siteName, Error: "测试结果写入失败"})
-			continue
-		}
-
-		classified, classErr := classifyTestResults(ctx, runID, config.SlowThresholdMs)
-		if classErr != nil {
-			cleanTestResults(ctx, runID)
-			jsonResults = append(jsonResults, siteResultJSON{SiteName: siteName, Error: "读取测试结果失败"})
-			continue
-		}
-
-		enabledFailed := classified.EnabledFailed
-		disabledSuccess := classified.DisabledSuccess
-		enabledSlow := classified.EnabledSlow
-
-		var toggleResults []channelStatusChangeResult
-		if config.AutoToggle && (len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0) {
-			toggleResults = autoToggleChannels(ctx, enabledFailed, disabledSuccess, cred)
-			for _, r := range enabledSlow {
-				tr := updateOneChannelStatus(ctx, r.ChannelID, r.Name, 2, cred)
-				toggleResults = append(toggleResults, tr)
+			if len(targetChannels) == 0 {
+				jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: group.Name})
+				continue
 			}
-		}
 
-		cleanTestResults(ctx, runID)
-		nowTs := time.Now()
-		_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": config.ID}, bson.M{"$set": bson.M{"last_attempt_at": nowTs}})
+			skipCodes := resolveGroupSkipStatusCodes(group, cred)
+			runID := fmt.Sprintf("global-%d-%s-%d", time.Now().UnixNano(), siteID.Hex(), gi)
+			if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, skipCodes, group.AnyModelSuccess); err != nil {
+				jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: group.Name, Error: "测试结果写入失败"})
+				continue
+			}
 
-		hasChanges := len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0
-		if hasChanges || alwaysNotify {
-			siteNotifyResults = append(siteNotifyResults, globalSiteNotifyResult{
-				SiteName:        siteName,
-				Config:          config,
-				All:             classified.All,
-				EnabledFailed:   enabledFailed,
-				DisabledSuccess: disabledSuccess,
-				EnabledSlow:     enabledSlow,
-				MissingIDs:      missingIDs,
-				ToggleResults:   toggleResults,
-				SuccessCount:    classified.SuccessCount,
+			classified, classErr := classifyTestResults(ctx, runID, group.SlowThresholdMs)
+			if classErr != nil {
+				cleanTestResults(ctx, runID)
+				jsonResults = append(jsonResults, groupResultJSON{SiteName: siteName, GroupName: group.Name, Error: "读取测试结果失败"})
+				continue
+			}
+
+			enabledFailed := classified.EnabledFailed
+			disabledSuccess := classified.DisabledSuccess
+			enabledSlow := classified.EnabledSlow
+
+			var toggleResults []channelStatusChangeResult
+			if group.AutoToggle && (len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0) {
+				toggleResults = autoToggleChannels(ctx, enabledFailed, disabledSuccess, cred)
+				for _, r := range enabledSlow {
+					tr := updateOneChannelStatus(ctx, r.ChannelID, r.Name, 2, cred)
+					toggleResults = append(toggleResults, tr)
+				}
+			}
+
+			cleanTestResults(ctx, runID)
+			nowTs := time.Now()
+			_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": config.ID}, bson.M{"$set": bson.M{
+				fmt.Sprintf("monitoring_groups.%d.last_attempt_at", gi): nowTs,
+			}})
+
+			hasChanges := len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0
+			if hasChanges || alwaysNotify {
+				siteNotifyResults = append(siteNotifyResults, globalSiteNotifyResult{
+					SiteName:        siteName,
+					GroupName:       group.Name,
+					Config:          config,
+					AutoToggle:      group.AutoToggle,
+					SlowThresholdMs: group.SlowThresholdMs,
+					All:             classified.All,
+					EnabledFailed:   enabledFailed,
+					DisabledSuccess: disabledSuccess,
+					EnabledSlow:     enabledSlow,
+					MissingIDs:      missingIDs,
+					ToggleResults:   toggleResults,
+					SuccessCount:    classified.SuccessCount,
+				})
+			}
+
+			jsonResults = append(jsonResults, groupResultJSON{
+				SiteName:  siteName,
+				GroupName: group.Name,
+				Tested:    len(classified.All),
+				Success:   classified.SuccessCount,
+				Fail:      len(classified.All) - classified.SuccessCount,
 			})
 		}
-
-		jsonResults = append(jsonResults, siteResultJSON{
-			SiteName: siteName,
-			Tested:   len(classified.All),
-			Success:  classified.SuccessCount,
-			Fail:     len(classified.All) - classified.SuccessCount,
-		})
 	}
 
 	if len(jsonResults) == 0 {
-		c.JSON(http.StatusOK, gin.H{"message": "没有已启用的站点推送配置", "results": []siteResultJSON{}})
+		c.JSON(http.StatusOK, gin.H{"message": "没有已启用的站点推送配置", "results": []groupResultJSON{}})
 		return
 	}
 
@@ -1642,7 +1734,7 @@ func RunChannelAvailabilityGlobalNotifyHandler(c *gin.Context) {
 		totalTested += r.Tested
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"message":  fmt.Sprintf("共处理 %d 个站点，测试 %d 个渠道", len(jsonResults), totalTested),
+		"message":  fmt.Sprintf("共处理 %d 个监测组，测试 %d 个渠道", len(jsonResults), totalTested),
 		"notified": notified,
 		"results":  jsonResults,
 	})
@@ -1697,7 +1789,11 @@ func buildGlobalAvailabilityNotifyMessage(sites []globalSiteNotifyResult) string
 		}
 		successCount := site.SuccessCount
 		totalCount := len(site.All)
-		b.WriteString(fmt.Sprintf("\n📍 %s\n", site.SiteName))
+		displayName := site.SiteName
+		if site.GroupName != "" {
+			displayName = site.SiteName + " / " + site.GroupName
+		}
+		b.WriteString(fmt.Sprintf("\n📍 %s\n", displayName))
 		b.WriteString(fmt.Sprintf("共测试 %d 个渠道，成功 %d，失败 %d\n", totalCount, successCount, totalCount-successCount))
 
 		toggleResultMap := make(map[int]bool, len(site.ToggleResults))
@@ -1709,7 +1805,7 @@ func buildGlobalAvailabilityNotifyMessage(sites []globalSiteNotifyResult) string
 			b.WriteString(fmt.Sprintf("\n🟢 以下已禁用渠道测试通过（%d个）：\n", len(site.DisabledSuccess)))
 			for _, r := range site.DisabledSuccess {
 				action := "建议：可启用"
-				if site.Config.AutoToggle {
+				if site.AutoToggle {
 					if toggleResultMap[r.ChannelID] {
 						action = "已自动启用 ✅"
 					} else {
@@ -1729,7 +1825,7 @@ func buildGlobalAvailabilityNotifyMessage(sites []globalSiteNotifyResult) string
 					errMsg = errMsg[:80] + "..."
 				}
 				action := "建议：临时停用"
-				if site.Config.AutoToggle {
+				if site.AutoToggle {
 					if toggleResultMap[r.ChannelID] {
 						action = "已自动停用 ✅"
 					} else {
@@ -1746,10 +1842,10 @@ func buildGlobalAvailabilityNotifyMessage(sites []globalSiteNotifyResult) string
 		}
 
 		if len(site.EnabledSlow) > 0 {
-			b.WriteString(fmt.Sprintf("\n🟡 以下已启用渠道响应超时（%d个，阈值 %dms）：\n", len(site.EnabledSlow), site.Config.SlowThresholdMs))
+			b.WriteString(fmt.Sprintf("\n🟡 以下已启用渠道响应超时（%d个，阈值 %dms）：\n", len(site.EnabledSlow), site.SlowThresholdMs))
 			for _, r := range site.EnabledSlow {
 				action := "建议：临时停用"
-				if site.Config.AutoToggle {
+				if site.AutoToggle {
 					if toggleResultMap[r.ChannelID] {
 						action = "已自动停用 ✅"
 					} else {
@@ -1776,6 +1872,7 @@ func buildGlobalAvailabilityNotifyMessage(sites []globalSiteNotifyResult) string
 func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 	var req struct {
 		UpstreamSiteID string `json:"upstreamSiteId"`
+		GroupIndex     *int   `json:"groupIndex"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
@@ -1794,8 +1891,8 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load notify config"})
 		return
 	}
-	if len(notifyConfig.ChannelIDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请先配置生效渠道 ID"})
+	if len(notifyConfig.MonitoringGroups) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请先配置监测组"})
 		return
 	}
 	nType, webhookURL, signKey, err := resolveNotifyWebhook(ctx, notifyConfig)
@@ -1836,108 +1933,141 @@ func RunChannelAvailabilityNotifyHandler(c *gin.Context) {
 	for _, ch := range storedChannels {
 		upstreamIDSet[ch.ChannelID] = true
 	}
-	var missingIDs []int
-	var validIDs []int
-	for _, id := range notifyConfig.ChannelIDs {
-		if upstreamIDSet[id] {
-			validIDs = append(validIDs, id)
-		} else {
-			missingIDs = append(missingIDs, id)
+
+	var groupsToRun []models.MonitoringGroup
+	var groupIndices []int
+	if req.GroupIndex != nil {
+		gi := *req.GroupIndex
+		if gi < 0 || gi >= len(notifyConfig.MonitoringGroups) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的监测组索引"})
+			return
+		}
+		groupsToRun = []models.MonitoringGroup{notifyConfig.MonitoringGroups[gi]}
+		groupIndices = []int{gi}
+	} else {
+		groupsToRun = notifyConfig.MonitoringGroups
+		for i := range groupsToRun {
+			groupIndices = append(groupIndices, i)
 		}
 	}
 
-	filter := bson.M{"channelId": bson.M{"$in": validIDs}, "upstream_site_id": siteID}
-	if notifyConfig.StatusFilter == 1 {
-		filter["status"] = 1
-	} else if notifyConfig.StatusFilter == 2 {
-		filter["status"] = 2
+	type groupResultJSON struct {
+		GroupName string `json:"groupName"`
+		Tested    int    `json:"tested"`
+		Success   int    `json:"success"`
+		Fail      int    `json:"fail"`
+		Notified  bool   `json:"notified"`
+		Error     string `json:"error,omitempty"`
 	}
-	cursor, err := UpstreamChannelCol.Find(ctx, filter)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询渠道失败"})
-		return
-	}
-	defer cursor.Close(ctx)
-	var targetChannels []models.UpstreamChannel
-	if err := cursor.All(ctx, &targetChannels); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "解析渠道失败"})
-		return
-	}
-
-	if len(targetChannels) == 0 {
-		c.JSON(http.StatusOK, gin.H{
-			"message":    "没有符合条件的渠道",
-			"missingIds": missingIDs,
-			"tested":     0,
-			"success":    0,
-			"notified":   false,
-		})
-		return
-	}
-
-	runID := fmt.Sprintf("notify-%d", time.Now().UnixNano())
+	var groupResults []groupResultJSON
 	cleanTestResults(ctx, "")
-	if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, cred.SkipStatusCodes); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "测试结果写入失败"})
-		return
-	}
 
-	classified, err := classifyTestResults(ctx, runID, notifyConfig.SlowThresholdMs)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取测试结果失败"})
-		return
-	}
-
-	results := classified.All
-	enabledFailed := classified.EnabledFailed
-	disabledSuccess := classified.DisabledSuccess
-	enabledSlow := classified.EnabledSlow
-	successCount := classified.SuccessCount
-
-	var toggleResults []channelStatusChangeResult
-	if notifyConfig.AutoToggle && (len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0) {
-		toggleResults = autoToggleChannels(ctx, enabledFailed, disabledSuccess, cred)
-		for _, r := range enabledSlow {
-			tr := updateOneChannelStatus(ctx, r.ChannelID, r.Name, 2, cred)
-			toggleResults = append(toggleResults, tr)
+	for idx, group := range groupsToRun {
+		gi := groupIndices[idx]
+		if len(group.ChannelIDs) == 0 {
+			groupResults = append(groupResults, groupResultJSON{GroupName: group.Name, Error: "无生效渠道 ID"})
+			continue
 		}
-	}
 
-	notified := false
-	notifyErrMsg := ""
-	if len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0 {
-		card := buildAvailabilityNotifyCard(siteName, results, enabledFailed, disabledSuccess, enabledSlow, missingIDs, notifyConfig.AutoToggle, notifyConfig.SlowThresholdMs, toggleResults)
-		msg := buildAvailabilityNotifyMessage(siteName, results, enabledFailed, disabledSuccess, enabledSlow, missingIDs, notifyConfig.AutoToggle, notifyConfig.SlowThresholdMs, toggleResults)
-		if err := sendAvailabilityCardNotification(ctx, nType, webhookURL, signKey, card, msg); err != nil {
-			notifyErrMsg = err.Error()
-		} else {
-			notified = true
+		var missingIDs []int
+		var validIDs []int
+		for _, id := range group.ChannelIDs {
+			if upstreamIDSet[id] {
+				validIDs = append(validIDs, id)
+			} else {
+				missingIDs = append(missingIDs, id)
+			}
 		}
+
+		filter := bson.M{"channelId": bson.M{"$in": validIDs}, "upstream_site_id": siteID}
+		if group.StatusFilter == 1 {
+			filter["status"] = 1
+		} else if group.StatusFilter == 2 {
+			filter["status"] = 2
+		}
+		cursor, chErr := UpstreamChannelCol.Find(ctx, filter)
+		if chErr != nil {
+			groupResults = append(groupResults, groupResultJSON{GroupName: group.Name, Error: "查询渠道失败"})
+			continue
+		}
+		var targetChannels []models.UpstreamChannel
+		if err := cursor.All(ctx, &targetChannels); err != nil {
+			cursor.Close(ctx)
+			groupResults = append(groupResults, groupResultJSON{GroupName: group.Name, Error: "解析渠道失败"})
+			continue
+		}
+		cursor.Close(ctx)
+
+		if len(targetChannels) == 0 {
+			groupResults = append(groupResults, groupResultJSON{GroupName: group.Name})
+			continue
+		}
+
+		displayName := siteName
+		if group.Name != "" {
+			displayName = siteName + " / " + group.Name
+		}
+
+		skipCodes := resolveGroupSkipStatusCodes(group, cred)
+		runID := fmt.Sprintf("notify-%d-%d", time.Now().UnixNano(), gi)
+		if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, skipCodes, group.AnyModelSuccess); err != nil {
+			groupResults = append(groupResults, groupResultJSON{GroupName: group.Name, Error: "测试结果写入失败"})
+			continue
+		}
+
+		classified, classErr := classifyTestResults(ctx, runID, group.SlowThresholdMs)
+		if classErr != nil {
+			cleanTestResults(ctx, runID)
+			groupResults = append(groupResults, groupResultJSON{GroupName: group.Name, Error: "读取测试结果失败"})
+			continue
+		}
+
+		enabledFailed := classified.EnabledFailed
+		disabledSuccess := classified.DisabledSuccess
+		enabledSlow := classified.EnabledSlow
+
+		var toggleResults []channelStatusChangeResult
+		if group.AutoToggle && (len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0) {
+			toggleResults = autoToggleChannels(ctx, enabledFailed, disabledSuccess, cred)
+			for _, r := range enabledSlow {
+				tr := updateOneChannelStatus(ctx, r.ChannelID, r.Name, 2, cred)
+				toggleResults = append(toggleResults, tr)
+			}
+		}
+
+		notified := false
+		if len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0 {
+			card := buildAvailabilityNotifyCard(displayName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, group.AutoToggle, group.SlowThresholdMs, toggleResults)
+			msg := buildAvailabilityNotifyMessage(displayName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, group.AutoToggle, group.SlowThresholdMs, toggleResults)
+			if err := sendAvailabilityCardNotification(ctx, nType, webhookURL, signKey, card, msg); err == nil {
+				notified = true
+			}
+		}
+
+		cleanTestResults(ctx, runID)
+		nowTs := time.Now()
+		_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": notifyConfig.ID}, bson.M{"$set": bson.M{
+			fmt.Sprintf("monitoring_groups.%d.last_attempt_at", gi): nowTs,
+		}})
+
+		failCount := len(classified.All) - classified.SuccessCount
+		groupResults = append(groupResults, groupResultJSON{
+			GroupName: group.Name,
+			Tested:    len(classified.All),
+			Success:   classified.SuccessCount,
+			Fail:      failCount,
+			Notified:  notified,
+		})
 	}
 
-	cleanTestResults(ctx, runID)
-
-	nowTs := time.Now()
-	_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"upstream_site_id": siteID}, bson.M{"$set": bson.M{"last_attempt_at": nowTs}})
-
-	failCount := len(results) - successCount
-	resp := gin.H{
-		"message":         fmt.Sprintf("测试完成：成功 %d，失败 %d，共 %d 个渠道", successCount, failCount, len(results)),
-		"tested":          len(results),
-		"success":         successCount,
-		"fail":            failCount,
-		"missingIds":      missingIDs,
-		"notified":        notified,
-		"enabledFailed":   len(enabledFailed),
-		"disabledSuccess": len(disabledSuccess),
-		"enabledSlow":     len(enabledSlow),
-		"autoToggled":     len(toggleResults),
-		"results":         results,
+	totalTested := 0
+	for _, r := range groupResults {
+		totalTested += r.Tested
 	}
-	if notifyErrMsg != "" {
-		resp["notifyError"] = notifyErrMsg
-	}
-	c.JSON(http.StatusOK, resp)
+	c.JSON(http.StatusOK, gin.H{
+		"message":      fmt.Sprintf("共执行 %d 个监测组，测试 %d 个渠道", len(groupResults), totalTested),
+		"groupResults": groupResults,
+	})
 }
 
 func loadChannelAvailabilityNotifyConfig(ctx context.Context, siteID primitive.ObjectID) (models.ChannelAvailabilityNotifyConfig, error) {
@@ -1949,7 +2079,28 @@ func loadChannelAvailabilityNotifyConfig(ctx context.Context, siteID primitive.O
 			NotificationType: "feishu",
 		}, nil
 	}
-	return config, err
+	if err != nil {
+		return config, err
+	}
+	if len(config.MonitoringGroups) == 0 && len(config.ChannelIDs) > 0 {
+		config.MonitoringGroups = []models.MonitoringGroup{{
+			Name:            "默认组",
+			ChannelIDs:      config.ChannelIDs,
+			StatusFilter:    config.StatusFilter,
+			AutoToggle:      config.AutoToggle,
+			SlowThresholdMs: config.SlowThresholdMs,
+			Schedules:       config.Schedules,
+			LastAttemptAt:   config.LastAttemptAt,
+		}}
+		config.ChannelIDs = nil
+		config.Schedules = nil
+		config.LastAttemptAt = nil
+		_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": config.ID}, bson.M{
+			"$set":   bson.M{"monitoring_groups": config.MonitoringGroups},
+			"$unset": bson.M{"channel_ids": "", "schedules": "", "last_attempt_at": "", "status_filter": "", "auto_toggle": "", "slow_threshold_ms": ""},
+		})
+	}
+	return config, nil
 }
 
 func resolveNotifyWebhook(ctx context.Context, config models.ChannelAvailabilityNotifyConfig) (string, string, string, error) {
@@ -2227,7 +2378,11 @@ func buildGlobalAvailabilityNotifyCard(sites []globalSiteNotifyResult) map[strin
 		totalCount := len(site.All)
 		failCount := totalCount - successCount
 
-		siteHeader := fmt.Sprintf("📍 **%s** — 测试 %d 个，成功 %d，失败 %d", site.SiteName, totalCount, successCount, failCount)
+		displayName := site.SiteName
+		if site.GroupName != "" {
+			displayName = site.SiteName + " / " + site.GroupName
+		}
+		siteHeader := fmt.Sprintf("📍 **%s** — 测试 %d 个，成功 %d，失败 %d", displayName, totalCount, successCount, failCount)
 		elements = append(elements, map[string]interface{}{
 			"tag":  "div",
 			"text": feishuMarkdown(siteHeader),
@@ -2246,7 +2401,7 @@ func buildGlobalAvailabilityNotifyCard(sites []globalSiteNotifyResult) map[strin
 			for _, r := range site.EnabledFailed {
 				elements = append(elements, map[string]interface{}{
 					"tag":  "div",
-					"text": feishuMarkdown(buildChannelLine(r, site.Config.AutoToggle, toggleMap)),
+					"text": feishuMarkdown(buildChannelLine(r, site.AutoToggle, toggleMap)),
 				})
 			}
 		}
@@ -2259,7 +2414,7 @@ func buildGlobalAvailabilityNotifyCard(sites []globalSiteNotifyResult) map[strin
 			for _, r := range site.DisabledSuccess {
 				elements = append(elements, map[string]interface{}{
 					"tag":  "div",
-					"text": feishuMarkdown(buildChannelLine(r, site.Config.AutoToggle, toggleMap)),
+					"text": feishuMarkdown(buildChannelLine(r, site.AutoToggle, toggleMap)),
 				})
 			}
 		}
@@ -2267,12 +2422,12 @@ func buildGlobalAvailabilityNotifyCard(sites []globalSiteNotifyResult) map[strin
 		if len(site.EnabledSlow) > 0 {
 			elements = append(elements, map[string]interface{}{
 				"tag":  "div",
-				"text": feishuMarkdown(fmt.Sprintf("🟡 **响应超时（%d个，阈值 %dms）**", len(site.EnabledSlow), site.Config.SlowThresholdMs)),
+				"text": feishuMarkdown(fmt.Sprintf("🟡 **响应超时（%d个，阈值 %dms）**", len(site.EnabledSlow), site.SlowThresholdMs)),
 			})
 			for _, r := range site.EnabledSlow {
 				elements = append(elements, map[string]interface{}{
 					"tag":  "div",
-					"text": feishuMarkdown(buildSlowChannelLine(r, site.Config.AutoToggle, toggleMap)),
+					"text": feishuMarkdown(buildSlowChannelLine(r, site.AutoToggle, toggleMap)),
 				})
 			}
 		}
@@ -2443,24 +2598,44 @@ func runScheduledChannelAvailabilityNotify() {
 
 	cleanTestResults(ctx, "")
 
-	var globalScheduleSites []models.ChannelAvailabilityNotifyConfig
+	type globalGroupEntry struct {
+		config     models.ChannelAvailabilityNotifyConfig
+		groupIndex int
+	}
+	var globalScheduleGroups []globalGroupEntry
 
 	for cursor.Next(ctx) {
 		var config models.ChannelAvailabilityNotifyConfig
 		if err := cursor.Decode(&config); err != nil {
 			continue
 		}
-		if len(config.ChannelIDs) == 0 || config.UpstreamSiteID.IsZero() {
+		if config.UpstreamSiteID.IsZero() {
 			continue
 		}
-		if len(config.Schedules) > 0 {
-			runScheduledNotifyForSite(ctx, config, config.Schedules)
-		} else if globalFound && len(globalConfig.Schedules) > 0 {
-			globalScheduleSites = append(globalScheduleSites, config)
+		if len(config.MonitoringGroups) == 0 && len(config.ChannelIDs) > 0 {
+			config.MonitoringGroups = []models.MonitoringGroup{{
+				Name:            "默认组",
+				ChannelIDs:      config.ChannelIDs,
+				StatusFilter:    config.StatusFilter,
+				AutoToggle:      config.AutoToggle,
+				SlowThresholdMs: config.SlowThresholdMs,
+				Schedules:       config.Schedules,
+				LastAttemptAt:   config.LastAttemptAt,
+			}}
+		}
+		for gi, group := range config.MonitoringGroups {
+			if len(group.ChannelIDs) == 0 {
+				continue
+			}
+			if len(group.Schedules) > 0 {
+				runScheduledNotifyForGroup(ctx, config, group, gi)
+			} else if globalFound && len(globalConfig.Schedules) > 0 {
+				globalScheduleGroups = append(globalScheduleGroups, globalGroupEntry{config: config, groupIndex: gi})
+			}
 		}
 	}
 
-	if len(globalScheduleSites) == 0 {
+	if len(globalScheduleGroups) == 0 {
 		return
 	}
 
@@ -2471,22 +2646,25 @@ func runScheduledChannelAvailabilityNotify() {
 	}
 
 	var siteNotifyResults []globalSiteNotifyResult
-	for _, config := range globalScheduleSites {
-		if config.LastAttemptAt != nil {
-			if config.LastAttemptAt.After(scheduleStart) || config.LastAttemptAt.Equal(scheduleStart) {
-				elapsed := now.Sub(*config.LastAttemptAt)
+	for _, entry := range globalScheduleGroups {
+		group := entry.config.MonitoringGroups[entry.groupIndex]
+		if group.LastAttemptAt != nil {
+			if group.LastAttemptAt.After(scheduleStart) || group.LastAttemptAt.Equal(scheduleStart) {
+				elapsed := now.Sub(*group.LastAttemptAt)
 				if elapsed < time.Duration(schedule.IntervalMinutes)*time.Minute {
 					continue
 				}
 			}
 		}
 
-		result := runAndCollectSiteResult(ctx, config, globalConfig.AlwaysNotify)
+		result := runAndCollectGroupResult(ctx, entry.config, group, globalConfig.AlwaysNotify)
 		if result != nil {
 			siteNotifyResults = append(siteNotifyResults, *result)
 		}
 		nowTs := time.Now()
-		_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": config.ID}, bson.M{"$set": bson.M{"last_attempt_at": nowTs}})
+		_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": entry.config.ID}, bson.M{"$set": bson.M{
+			fmt.Sprintf("monitoring_groups.%d.last_attempt_at", entry.groupIndex): nowTs,
+		}})
 	}
 
 	if len(siteNotifyResults) > 0 {
@@ -2501,7 +2679,14 @@ func runScheduledChannelAvailabilityNotify() {
 	}
 }
 
-func runAndCollectSiteResult(ctx context.Context, config models.ChannelAvailabilityNotifyConfig, alwaysNotify bool) *globalSiteNotifyResult {
+func resolveGroupSkipStatusCodes(group models.MonitoringGroup, cred availabilityCredentials) []int {
+	if len(group.SkipStatusCodes) > 0 {
+		return group.SkipStatusCodes
+	}
+	return cred.SkipStatusCodes
+}
+
+func runAndCollectGroupResult(ctx context.Context, config models.ChannelAvailabilityNotifyConfig, group models.MonitoringGroup, alwaysNotify bool) *globalSiteNotifyResult {
 	siteID := config.UpstreamSiteID
 	siteName := ""
 	if site, sErr := loadUpstreamSite(ctx, siteID); sErr == nil {
@@ -2521,11 +2706,11 @@ func runAndCollectSiteResult(ctx context.Context, config models.ChannelAvailabil
 		channelURL := cred.BaseURL + "/api/channel/"
 		freshItems, fetchErr := fetchAllUpstreamChannelItems(ctx, channelURL, cred.Token, cred.UserID)
 		if fetchErr != nil {
-			log.Printf("[channel-availability-scheduler] site %s fetch channels error: %v", siteID.Hex(), fetchErr)
+			log.Printf("[channel-availability-scheduler] site %s group %s fetch channels error: %v", siteID.Hex(), group.Name, fetchErr)
 			return nil
 		}
 		if err := saveUpstreamChannels(ctx, freshItems, siteID); err != nil {
-			log.Printf("[channel-availability-scheduler] site %s save channels error: %v", siteID.Hex(), err)
+			log.Printf("[channel-availability-scheduler] site %s group %s save channels error: %v", siteID.Hex(), group.Name, err)
 			return nil
 		}
 	}
@@ -2540,7 +2725,7 @@ func runAndCollectSiteResult(ctx context.Context, config models.ChannelAvailabil
 	}
 	var missingIDs []int
 	var validIDs []int
-	for _, id := range config.ChannelIDs {
+	for _, id := range group.ChannelIDs {
 		if upstreamIDSet[id] {
 			validIDs = append(validIDs, id)
 		} else {
@@ -2549,9 +2734,9 @@ func runAndCollectSiteResult(ctx context.Context, config models.ChannelAvailabil
 	}
 
 	filter := bson.M{"channelId": bson.M{"$in": validIDs}, "upstream_site_id": siteID}
-	if config.StatusFilter == 1 {
+	if group.StatusFilter == 1 {
 		filter["status"] = 1
-	} else if config.StatusFilter == 2 {
+	} else if group.StatusFilter == 2 {
 		filter["status"] = 2
 	}
 	channelCursor, err := UpstreamChannelCol.Find(ctx, filter)
@@ -2567,15 +2752,16 @@ func runAndCollectSiteResult(ctx context.Context, config models.ChannelAvailabil
 		return nil
 	}
 
+	skipCodes := resolveGroupSkipStatusCodes(group, cred)
 	runID := fmt.Sprintf("sched-%d-%s", time.Now().UnixNano(), siteID.Hex())
-	if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, cred.SkipStatusCodes); err != nil {
-		log.Printf("[channel-availability-scheduler] site %s write test results error: %v", siteID.Hex(), err)
+	if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, skipCodes, group.AnyModelSuccess); err != nil {
+		log.Printf("[channel-availability-scheduler] site %s group %s write test results error: %v", siteID.Hex(), group.Name, err)
 		return nil
 	}
 
-	classified, err := classifyTestResults(ctx, runID, config.SlowThresholdMs)
+	classified, err := classifyTestResults(ctx, runID, group.SlowThresholdMs)
 	if err != nil {
-		log.Printf("[channel-availability-scheduler] site %s classify test results error: %v", siteID.Hex(), err)
+		log.Printf("[channel-availability-scheduler] site %s group %s classify test results error: %v", siteID.Hex(), group.Name, err)
 		cleanTestResults(ctx, runID)
 		return nil
 	}
@@ -2585,7 +2771,7 @@ func runAndCollectSiteResult(ctx context.Context, config models.ChannelAvailabil
 	enabledSlow := classified.EnabledSlow
 
 	var toggleResults []channelStatusChangeResult
-	if config.AutoToggle && (len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0) {
+	if group.AutoToggle && (len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0) {
 		toggleResults = autoToggleChannels(ctx, enabledFailed, disabledSuccess, cred)
 		for _, r := range enabledSlow {
 			tr := updateOneChannelStatus(ctx, r.ChannelID, r.Name, 2, cred)
@@ -2601,7 +2787,10 @@ func runAndCollectSiteResult(ctx context.Context, config models.ChannelAvailabil
 
 	return &globalSiteNotifyResult{
 		SiteName:        siteName,
+		GroupName:       group.Name,
 		Config:          config,
+		AutoToggle:      group.AutoToggle,
+		SlowThresholdMs: group.SlowThresholdMs,
 		All:             classified.All,
 		EnabledFailed:   enabledFailed,
 		DisabledSuccess: disabledSuccess,
@@ -2612,15 +2801,15 @@ func runAndCollectSiteResult(ctx context.Context, config models.ChannelAvailabil
 	}
 }
 
-func runScheduledNotifyForSite(ctx context.Context, config models.ChannelAvailabilityNotifyConfig, schedules []models.NotificationSchedule) {
+func runScheduledNotifyForGroup(ctx context.Context, config models.ChannelAvailabilityNotifyConfig, group models.MonitoringGroup, groupIndex int) {
 	now := time.Now()
-	schedule, scheduleStart, ok := activeNotificationSchedule(schedules, now)
+	schedule, scheduleStart, ok := activeNotificationSchedule(group.Schedules, now)
 	if !ok {
 		return
 	}
-	if config.LastAttemptAt != nil {
-		if config.LastAttemptAt.After(scheduleStart) || config.LastAttemptAt.Equal(scheduleStart) {
-			elapsed := now.Sub(*config.LastAttemptAt)
+	if group.LastAttemptAt != nil {
+		if group.LastAttemptAt.After(scheduleStart) || group.LastAttemptAt.Equal(scheduleStart) {
+			elapsed := now.Sub(*group.LastAttemptAt)
 			if elapsed < time.Duration(schedule.IntervalMinutes)*time.Minute {
 				return
 			}
@@ -2646,11 +2835,11 @@ func runScheduledNotifyForSite(ctx context.Context, config models.ChannelAvailab
 		channelURL := cred.BaseURL + "/api/channel/"
 		freshItems, fetchErr := fetchAllUpstreamChannelItems(ctx, channelURL, cred.Token, cred.UserID)
 		if fetchErr != nil {
-			log.Printf("[channel-availability-scheduler] site %s fetch channels error: %v", siteID.Hex(), fetchErr)
+			log.Printf("[channel-availability-scheduler] site %s group %s fetch channels error: %v", siteID.Hex(), group.Name, fetchErr)
 			return
 		}
 		if err := saveUpstreamChannels(ctx, freshItems, siteID); err != nil {
-			log.Printf("[channel-availability-scheduler] site %s save channels error: %v", siteID.Hex(), err)
+			log.Printf("[channel-availability-scheduler] site %s group %s save channels error: %v", siteID.Hex(), group.Name, err)
 			return
 		}
 	}
@@ -2665,7 +2854,7 @@ func runScheduledNotifyForSite(ctx context.Context, config models.ChannelAvailab
 	}
 	var missingIDs []int
 	var validIDs []int
-	for _, id := range config.ChannelIDs {
+	for _, id := range group.ChannelIDs {
 		if upstreamIDSet[id] {
 			validIDs = append(validIDs, id)
 		} else {
@@ -2674,9 +2863,9 @@ func runScheduledNotifyForSite(ctx context.Context, config models.ChannelAvailab
 	}
 
 	filter := bson.M{"channelId": bson.M{"$in": validIDs}, "upstream_site_id": siteID}
-	if config.StatusFilter == 1 {
+	if group.StatusFilter == 1 {
 		filter["status"] = 1
-	} else if config.StatusFilter == 2 {
+	} else if group.StatusFilter == 2 {
 		filter["status"] = 2
 	}
 	channelCursor, err := UpstreamChannelCol.Find(ctx, filter)
@@ -2692,15 +2881,21 @@ func runScheduledNotifyForSite(ctx context.Context, config models.ChannelAvailab
 		return
 	}
 
+	displayName := siteName
+	if group.Name != "" {
+		displayName = siteName + " / " + group.Name
+	}
+
+	skipCodes := resolveGroupSkipStatusCodes(group, cred)
 	runID := fmt.Sprintf("sched-%d", time.Now().UnixNano())
-	if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, cred.SkipStatusCodes); err != nil {
-		log.Printf("[channel-availability-scheduler] site %s write test results error: %v", siteID.Hex(), err)
+	if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, skipCodes, group.AnyModelSuccess); err != nil {
+		log.Printf("[channel-availability-scheduler] site %s group %s write test results error: %v", siteID.Hex(), group.Name, err)
 		return
 	}
 
-	classified, err := classifyTestResults(ctx, runID, config.SlowThresholdMs)
+	classified, err := classifyTestResults(ctx, runID, group.SlowThresholdMs)
 	if err != nil {
-		log.Printf("[channel-availability-scheduler] site %s classify test results error: %v", siteID.Hex(), err)
+		log.Printf("[channel-availability-scheduler] site %s group %s classify test results error: %v", siteID.Hex(), group.Name, err)
 		return
 	}
 
@@ -2709,7 +2904,7 @@ func runScheduledNotifyForSite(ctx context.Context, config models.ChannelAvailab
 	enabledSlow := classified.EnabledSlow
 
 	var toggleResults []channelStatusChangeResult
-	if config.AutoToggle && (len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0) {
+	if group.AutoToggle && (len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0) {
 		toggleResults = autoToggleChannels(ctx, enabledFailed, disabledSuccess, cred)
 		for _, r := range enabledSlow {
 			tr := updateOneChannelStatus(ctx, r.ChannelID, r.Name, 2, cred)
@@ -2718,15 +2913,17 @@ func runScheduledNotifyForSite(ctx context.Context, config models.ChannelAvailab
 	}
 
 	if len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0 {
-		card := buildAvailabilityNotifyCard(siteName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, config.AutoToggle, config.SlowThresholdMs, toggleResults)
-		msg := buildAvailabilityNotifyMessage(siteName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, config.AutoToggle, config.SlowThresholdMs, toggleResults)
+		card := buildAvailabilityNotifyCard(displayName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, group.AutoToggle, group.SlowThresholdMs, toggleResults)
+		msg := buildAvailabilityNotifyMessage(displayName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, group.AutoToggle, group.SlowThresholdMs, toggleResults)
 		if err := sendAvailabilityCardNotification(ctx, nType, webhookURL, signKey, card, msg); err != nil {
-			log.Printf("[channel-availability-scheduler] site %s send notification error: %v", siteID.Hex(), err)
+			log.Printf("[channel-availability-scheduler] site %s group %s send notification error: %v", siteID.Hex(), group.Name, err)
 		}
 	}
 
 	cleanTestResults(ctx, runID)
 
 	nowTs := time.Now()
-	_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": config.ID}, bson.M{"$set": bson.M{"last_attempt_at": nowTs}})
+	_, _ = ChannelAvailabilityNotifyCol.UpdateOne(ctx, bson.M{"_id": config.ID}, bson.M{"$set": bson.M{
+		fmt.Sprintf("monitoring_groups.%d.last_attempt_at", groupIndex): nowTs,
+	}})
 }

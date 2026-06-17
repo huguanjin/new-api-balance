@@ -101,6 +101,18 @@ type ModelDetectionNotificationConfig struct {
 	UpdatedAt         time.Time              `bson:"updated_at" json:"updated_at"`
 }
 
+type MonitoringGroup struct {
+	Name            string                 `bson:"name" json:"name"`
+	ChannelIDs      []int                  `bson:"channel_ids" json:"channelIds"`
+	StatusFilter    int                    `bson:"status_filter" json:"statusFilter"`
+	AutoToggle      bool                   `bson:"auto_toggle" json:"autoToggle"`
+	AnyModelSuccess bool                   `bson:"any_model_success" json:"anyModelSuccess"`
+	SlowThresholdMs int                    `bson:"slow_threshold_ms" json:"slowThresholdMs"`
+	SkipStatusCodes []int                  `bson:"skip_status_codes,omitempty" json:"skipStatusCodes,omitempty"`
+	Schedules       []NotificationSchedule `bson:"schedules" json:"schedules"`
+	LastAttemptAt   *time.Time             `bson:"last_attempt_at,omitempty" json:"lastAttemptAt,omitempty"`
+}
+
 type ChannelAvailabilityNotifyConfig struct {
 	ID               primitive.ObjectID     `bson:"_id,omitempty" json:"id"`
 	UpstreamSiteID   primitive.ObjectID     `bson:"upstream_site_id" json:"upstreamSiteId"`
@@ -109,12 +121,13 @@ type ChannelAvailabilityNotifyConfig struct {
 	WebhookURL       string                 `bson:"webhook_url" json:"webhookUrl"`
 	SignKey          string                 `bson:"sign_key" json:"signKey"`
 	WeworkWebhookURL string                 `bson:"wework_webhook_url" json:"weworkWebhookUrl"`
-	ChannelIDs       []int                  `bson:"channel_ids" json:"channelIds"`
-	StatusFilter     int                    `bson:"status_filter" json:"statusFilter"`
 	RefreshChannels  *bool                  `bson:"refresh_channels" json:"refreshChannels"`
-	AutoToggle       bool                   `bson:"auto_toggle" json:"autoToggle"`
-	SlowThresholdMs  int                    `bson:"slow_threshold_ms" json:"slowThresholdMs"`
-	Schedules        []NotificationSchedule `bson:"schedules" json:"schedules"`
+	MonitoringGroups []MonitoringGroup      `bson:"monitoring_groups" json:"monitoringGroups"`
+	ChannelIDs       []int                  `bson:"channel_ids,omitempty" json:"channelIds,omitempty"`
+	StatusFilter     int                    `bson:"status_filter,omitempty" json:"statusFilter,omitempty"`
+	AutoToggle       bool                   `bson:"auto_toggle,omitempty" json:"autoToggle,omitempty"`
+	SlowThresholdMs  int                    `bson:"slow_threshold_ms,omitempty" json:"slowThresholdMs,omitempty"`
+	Schedules        []NotificationSchedule `bson:"schedules,omitempty" json:"schedules,omitempty"`
 	LastAttemptAt    *time.Time             `bson:"last_attempt_at,omitempty" json:"lastAttemptAt,omitempty"`
 	UpdatedAt        time.Time              `bson:"updated_at" json:"updatedAt"`
 }

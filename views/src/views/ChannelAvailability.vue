@@ -267,7 +267,7 @@
     </el-dialog>
 
     <!-- 推送配置弹窗 -->
-    <el-dialog title="推送配置" v-model="notifyConfigDialogVisible" width="620px" :close-on-click-modal="false">
+    <el-dialog title="推送配置" v-model="notifyConfigDialogVisible" width="720px" :close-on-click-modal="false">
       <el-alert
         class="config-alert"
         type="info"
@@ -297,87 +297,124 @@
           <el-switch v-model="notifyForm.refreshChannels" />
           <div class="form-tip">开启后执行推送时会先拉取最新渠道数据；关闭则直接使用当前已存储的渠道信息</div>
         </el-form-item>
-        <el-form-item label="渠道状态筛选">
-          <el-select v-model="notifyForm.statusFilter" style="width: 180px">
-            <el-option label="全部状态" :value="0" />
-            <el-option label="仅启用" :value="1" />
-            <el-option label="仅禁用" :value="2" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="自动启停渠道">
-          <el-switch v-model="notifyForm.autoToggle" />
-          <div class="form-tip">开启后：已启用但测试失败的渠道将自动停用，已禁用但测试成功的渠道将自动启用</div>
-        </el-form-item>
-        <el-form-item label="响应超时停用">
-          <el-input-number v-model="notifyForm.slowThresholdMs" :min="0" :step="1000" style="width: 180px" />
-          <span style="margin-left: 8px; color: #606266; font-size: 13px">ms</span>
-          <div class="form-tip">已启用渠道测试成功但响应时间超过此阈值时自动停用；设为 0 表示不开启</div>
-        </el-form-item>
-        <el-form-item label="推送计划">
-          <div class="schedules-wrapper">
-            <div v-for="(sch, idx) in notifyForm.schedules" :key="idx" class="schedule-row">
-              <el-time-picker v-model="sch.startTimeObj" placeholder="开始" format="HH:mm" value-format="HH:mm" style="width: 110px" @change="v => sch.startTime = v" />
-              <span class="schedule-sep">至</span>
-              <el-time-picker v-model="sch.endTimeObj" placeholder="结束" format="HH:mm" value-format="HH:mm" style="width: 110px" @change="v => sch.endTime = v" />
-              <span class="schedule-sep">每</span>
-              <el-input-number v-model="sch.intervalMinutes" :min="1" :max="1440" size="small" style="width: 110px" />
-              <span class="schedule-sep">分钟</span>
-              <el-button :icon="Delete" type="danger" link size="small" @click="notifyForm.schedules.splice(idx, 1)" />
-            </div>
-            <el-button :icon="Plus" type="primary" link size="small" @click="addNotifySchedule">添加时间段</el-button>
-          </div>
-          <div class="form-tip">不配置推送计划时将使用全局推送计划；均未配置则仅支持手动执行</div>
-        </el-form-item>
-        <el-form-item label="生效渠道 ID">
-          <div class="notify-channel-picker">
-            <el-input
-              v-model="notifyChannelSearch"
-              placeholder="搜索渠道 ID / 名称 / 分组 / 标签"
-              clearable
-              :prefix-icon="Search"
-              style="margin-bottom: 8px"
-            />
-            <div class="notify-channel-actions">
-              <el-button type="primary" link size="small" @click="selectAllFilteredNotifyChannels">
-                全选筛选结果 ({{ filteredNotifyChannels.length }})
-              </el-button>
-              <el-button type="primary" link size="small" @click="selectAllNotifyChannels">
-                全选所有 ({{ channels.length }})
-              </el-button>
-              <el-button type="danger" link size="small" @click="notifyForm.channelIds = []" :disabled="!notifyForm.channelIds.length">
-                清空
-              </el-button>
-              <el-button
-                :type="notifyShowSelectedOnly ? 'warning' : 'info'"
-                link size="small"
-                @click="notifyShowSelectedOnly = !notifyShowSelectedOnly"
-                :disabled="!notifyForm.channelIds.length"
-              >
-                {{ notifyShowSelectedOnly ? '查看全部' : '仅看已选' }}
-              </el-button>
-              <span class="notify-channel-count">已选 {{ notifyForm.channelIds.length }} 个</span>
-            </div>
-            <div class="notify-channel-list">
-              <el-checkbox-group v-model="notifyForm.channelIds">
-                <el-checkbox
-                  v-for="ch in filteredNotifyChannels"
-                  :key="ch.channelId"
-                  :value="ch.channelId"
-                  :label="`${ch.channelId} - ${ch.name}`"
+
+        <el-divider content-position="left">监测组</el-divider>
+
+        <el-collapse v-model="activeGroupIndex" accordion>
+          <el-collapse-item
+            v-for="(group, gIdx) in notifyForm.monitoringGroups"
+            :key="gIdx"
+            :name="gIdx"
+          >
+            <template #title>
+              <div class="group-header">
+                <span class="group-title">{{ group.name || `监测组 ${gIdx + 1}` }}</span>
+                <span class="group-subtitle">{{ group.channelIds.length }} 个渠道</span>
+                <el-button
+                  v-if="notifyForm.monitoringGroups.length > 1"
+                  :icon="Delete"
+                  type="danger"
+                  link
+                  size="small"
+                  @click.stop="notifyForm.monitoringGroups.splice(gIdx, 1)"
+                  style="margin-left: 12px"
                 />
-              </el-checkbox-group>
-              <div v-if="filteredNotifyChannels.length === 0" class="notify-channel-empty">无匹配渠道</div>
-            </div>
-          </div>
-          <div class="form-tip">
-            至少配置一个渠道 ID，未在此列表中的渠道不会触发推送
-          </div>
-          <div v-if="notifyMissingIds.length" class="notify-missing-tags">
-            <el-tag v-for="id in notifyMissingIds" :key="id" type="danger" size="small" style="margin-right: 6px">
-              ID {{ id }} 不存在
-            </el-tag>
-          </div>
-        </el-form-item>
+              </div>
+            </template>
+
+            <el-form-item label="组名">
+              <el-input v-model="group.name" placeholder="例：重点渠道" style="width: 240px" />
+            </el-form-item>
+            <el-form-item label="渠道状态筛选">
+              <el-select v-model="group.statusFilter" style="width: 180px">
+                <el-option label="全部状态" :value="0" />
+                <el-option label="仅启用" :value="1" />
+                <el-option label="仅禁用" :value="2" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="自动启停渠道">
+              <el-switch v-model="group.autoToggle" />
+              <div class="form-tip">开启后：已启用但测试失败的渠道将自动停用，已禁用但测试成功的渠道将自动启用</div>
+            </el-form-item>
+            <el-form-item label="任一模型成功">
+              <el-switch v-model="group.anyModelSuccess" />
+              <div class="form-tip">开启后：渠道配置了多个测试模型时，只要有一个模型测试成功即视为渠道可用；若渠道原来是禁用状态则自动启用（需同时开启自动启停）</div>
+            </el-form-item>
+            <el-form-item label="响应超时停用">
+              <el-input-number v-model="group.slowThresholdMs" :min="0" :step="1000" style="width: 180px" />
+              <span style="margin-left: 8px; color: #606266; font-size: 13px">ms</span>
+              <div class="form-tip">已启用渠道测试成功但响应时间超过此阈值时自动停用；设为 0 表示不开启</div>
+            </el-form-item>
+            <el-form-item label="状态码过滤">
+              <el-input v-model="group.skipStatusCodesStr" placeholder="如 429,502（逗号分隔）" style="width: 280px" />
+              <div class="form-tip">匹配到的状态码视为测试通过，留空则使用站点级默认配置</div>
+            </el-form-item>
+            <el-form-item label="推送计划">
+              <div class="schedules-wrapper">
+                <div v-for="(sch, idx) in group.schedules" :key="idx" class="schedule-row">
+                  <el-time-picker v-model="sch.startTimeObj" placeholder="开始" format="HH:mm" value-format="HH:mm" style="width: 110px" @change="v => sch.startTime = v" />
+                  <span class="schedule-sep">至</span>
+                  <el-time-picker v-model="sch.endTimeObj" placeholder="结束" format="HH:mm" value-format="HH:mm" style="width: 110px" @change="v => sch.endTime = v" />
+                  <span class="schedule-sep">每</span>
+                  <el-input-number v-model="sch.intervalMinutes" :min="1" :max="1440" size="small" style="width: 110px" />
+                  <span class="schedule-sep">分钟</span>
+                  <el-button :icon="Delete" type="danger" link size="small" @click="group.schedules.splice(idx, 1)" />
+                </div>
+                <el-button :icon="Plus" type="primary" link size="small" @click="addGroupSchedule(gIdx)">添加时间段</el-button>
+              </div>
+              <div class="form-tip">不配置推送计划时将使用全局推送计划；均未配置则仅支持手动执行</div>
+            </el-form-item>
+            <el-form-item label="生效渠道 ID">
+              <div class="notify-channel-picker">
+                <el-input
+                  v-model="group._search"
+                  placeholder="搜索渠道 ID / 名称 / 分组 / 标签"
+                  clearable
+                  :prefix-icon="Search"
+                  style="margin-bottom: 8px"
+                />
+                <div class="notify-channel-actions">
+                  <el-button type="primary" link size="small" @click="selectAllFilteredGroupChannels(gIdx)">
+                    全选筛选结果 ({{ getFilteredGroupChannels(gIdx).length }})
+                  </el-button>
+                  <el-button type="primary" link size="small" @click="group.channelIds = channels.map(ch => ch.channelId)">
+                    全选所有 ({{ channels.length }})
+                  </el-button>
+                  <el-button type="danger" link size="small" @click="group.channelIds = []" :disabled="!group.channelIds.length">
+                    清空
+                  </el-button>
+                  <el-button
+                    :type="group._showSelectedOnly ? 'warning' : 'info'"
+                    link size="small"
+                    @click="group._showSelectedOnly = !group._showSelectedOnly"
+                    :disabled="!group.channelIds.length"
+                  >
+                    {{ group._showSelectedOnly ? '查看全部' : '仅看已选' }}
+                  </el-button>
+                  <span class="notify-channel-count">已选 {{ group.channelIds.length }} 个</span>
+                </div>
+                <div class="notify-channel-list">
+                  <el-checkbox-group v-model="group.channelIds">
+                    <el-checkbox
+                      v-for="ch in getFilteredGroupChannels(gIdx)"
+                      :key="ch.channelId"
+                      :value="ch.channelId"
+                      :label="`${ch.channelId} - ${ch.name}`"
+                    />
+                  </el-checkbox-group>
+                  <div v-if="getFilteredGroupChannels(gIdx).length === 0" class="notify-channel-empty">无匹配渠道</div>
+                </div>
+              </div>
+              <div class="form-tip">
+                至少配置一个渠道 ID，未在此列表中的渠道不会触发推送
+              </div>
+            </el-form-item>
+          </el-collapse-item>
+        </el-collapse>
+
+        <div style="text-align: center; margin-top: 12px">
+          <el-button :icon="Plus" type="primary" link @click="addMonitoringGroup">添加监测组</el-button>
+        </div>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -495,22 +532,30 @@ const notifyConfigLoading = ref(false)
 const savingNotify = ref(false)
 const testingNotify = ref(false)
 const runningNotify = ref(false)
+const activeGroupIndex = ref(0)
 const notifyForm = ref({
   enabled: false,
   notificationType: 'feishu',
   webhookUrl: '',
   signKey: '',
   weworkWebhookUrl: '',
-  channelIds: [],
-  statusFilter: 0,
   refreshChannels: true,
-  autoToggle: false,
-  slowThresholdMs: 0,
-  schedules: []
+  monitoringGroups: [
+    {
+      name: '默认组',
+      channelIds: [],
+      statusFilter: 0,
+      autoToggle: false,
+      anyModelSuccess: false,
+      slowThresholdMs: 0,
+      skipStatusCodes: [],
+      skipStatusCodesStr: '',
+      schedules: [],
+      _search: '',
+      _showSelectedOnly: false
+    }
+  ]
 })
-const notifyMissingIds = ref([])
-const notifyChannelSearch = ref('')
-const notifyShowSelectedOnly = ref(false)
 
 const globalNotifyConfigDialogVisible = ref(false)
 const globalNotifyConfigLoading = ref(false)
@@ -943,37 +988,46 @@ const saveCustomTestModels = async () => {
 
 // --- 推送配置 ---
 
+const makeGroupFromApi = (g) => ({
+  name: g.name || '默认组',
+  channelIds: g.channelIds || [],
+  statusFilter: g.statusFilter ?? 0,
+  autoToggle: g.autoToggle || false,
+  anyModelSuccess: g.anyModelSuccess || false,
+  slowThresholdMs: g.slowThresholdMs ?? 0,
+  skipStatusCodes: g.skipStatusCodes || [],
+  skipStatusCodesStr: (g.skipStatusCodes || []).join(','),
+  schedules: (g.schedules || []).map(s => ({
+    startTime: s.start_time || '',
+    endTime: s.end_time || '',
+    intervalMinutes: s.interval_minutes || 30,
+    startTimeObj: s.start_time || '',
+    endTimeObj: s.end_time || ''
+  })),
+  _search: '',
+  _showSelectedOnly: false
+})
+
 const openNotifyConfigDialog = async () => {
   notifyConfigDialogVisible.value = true
   notifyConfigLoading.value = true
-  notifyMissingIds.value = []
-  notifyChannelSearch.value = ''
-  notifyShowSelectedOnly.value = false
+  activeGroupIndex.value = 0
   try {
     const res = await axios.get('/api/channel-availability/notify-config', {
       headers: authHeaders(),
       params: { upstreamSiteId: selectedSiteId.value }
     })
+    const d = res.data || {}
+    const groups = (d.monitoringGroups || []).map(makeGroupFromApi)
     notifyForm.value = {
-      enabled: res.data?.enabled || false,
-      notificationType: res.data?.notificationType || 'feishu',
-      webhookUrl: res.data?.webhookUrl || '',
-      signKey: res.data?.signKey || '',
-      weworkWebhookUrl: res.data?.weworkWebhookUrl || '',
-      channelIds: res.data?.channelIds || [],
-      statusFilter: res.data?.statusFilter ?? 0,
-      refreshChannels: res.data?.refreshChannels ?? true,
-      autoToggle: res.data?.autoToggle || false,
-      slowThresholdMs: res.data?.slowThresholdMs ?? 0,
-      schedules: (res.data?.schedules || []).map(s => ({
-        startTime: s.start_time || '',
-        endTime: s.end_time || '',
-        intervalMinutes: s.interval_minutes || 30,
-        startTimeObj: s.start_time || '',
-        endTimeObj: s.end_time || ''
-      }))
+      enabled: d.enabled || false,
+      notificationType: d.notificationType || 'feishu',
+      webhookUrl: d.webhookUrl || '',
+      signKey: d.signKey || '',
+      weworkWebhookUrl: d.weworkWebhookUrl || '',
+      refreshChannels: d.refreshChannels ?? true,
+      monitoringGroups: groups.length > 0 ? groups : [makeGroupFromApi({})]
     }
-    checkNotifyMissingIds()
   } catch {
     ElMessage.error('获取推送配置失败')
   } finally {
@@ -981,13 +1035,15 @@ const openNotifyConfigDialog = async () => {
   }
 }
 
-const filteredNotifyChannels = computed(() => {
+const getFilteredGroupChannels = (gIdx) => {
+  const group = notifyForm.value.monitoringGroups[gIdx]
+  if (!group) return []
   let list = channels.value
-  if (notifyShowSelectedOnly.value) {
-    const selected = new Set(notifyForm.value.channelIds)
+  if (group._showSelectedOnly) {
+    const selected = new Set(group.channelIds)
     list = list.filter(ch => selected.has(ch.channelId))
   }
-  const keyword = notifyChannelSearch.value.trim().toLowerCase()
+  const keyword = (group._search || '').trim().toLowerCase()
   if (!keyword) return list
   return list.filter(ch =>
     String(ch.channelId).includes(keyword) ||
@@ -995,27 +1051,37 @@ const filteredNotifyChannels = computed(() => {
     (ch.group || '').toLowerCase().includes(keyword) ||
     (ch.tag || '').toLowerCase().includes(keyword)
   )
-})
+}
 
-const selectAllFilteredNotifyChannels = () => {
-  const current = new Set(notifyForm.value.channelIds)
-  for (const ch of filteredNotifyChannels.value) {
+const selectAllFilteredGroupChannels = (gIdx) => {
+  const group = notifyForm.value.monitoringGroups[gIdx]
+  if (!group) return
+  const current = new Set(group.channelIds)
+  for (const ch of getFilteredGroupChannels(gIdx)) {
     current.add(ch.channelId)
   }
-  notifyForm.value.channelIds = [...current]
+  group.channelIds = [...current]
 }
 
-const selectAllNotifyChannels = () => {
-  notifyForm.value.channelIds = channels.value.map(ch => ch.channelId)
+const addMonitoringGroup = () => {
+  notifyForm.value.monitoringGroups.push({
+    name: '',
+    channelIds: [],
+    statusFilter: 0,
+    autoToggle: false,
+    anyModelSuccess: false,
+    slowThresholdMs: 0,
+    skipStatusCodes: [],
+    skipStatusCodesStr: '',
+    schedules: [],
+    _search: '',
+    _showSelectedOnly: false
+  })
+  activeGroupIndex.value = notifyForm.value.monitoringGroups.length - 1
 }
 
-const checkNotifyMissingIds = () => {
-  const existingIds = new Set(channels.value.map(ch => ch.channelId))
-  notifyMissingIds.value = (notifyForm.value.channelIds || []).filter(id => !existingIds.has(id))
-}
-
-const addNotifySchedule = () => {
-  notifyForm.value.schedules.push({
+const addGroupSchedule = (gIdx) => {
+  notifyForm.value.monitoringGroups[gIdx].schedules.push({
     startTime: '09:00',
     endTime: '18:00',
     intervalMinutes: 30,
@@ -1025,18 +1091,39 @@ const addNotifySchedule = () => {
 }
 
 const saveNotifyConfig = async () => {
-  if (!notifyForm.value.channelIds.length) {
-    ElMessage.warning('请配置至少一个生效渠道 ID')
-    return
+  const groups = notifyForm.value.monitoringGroups
+  for (let i = 0; i < groups.length; i++) {
+    if (!groups[i].name?.trim()) {
+      ElMessage.warning(`监测组 ${i + 1} 名称不能为空`)
+      return
+    }
+    if (!groups[i].channelIds.length) {
+      ElMessage.warning(`监测组「${groups[i].name}」至少需要一个生效渠道 ID`)
+      return
+    }
   }
   savingNotify.value = true
   const payload = {
     upstreamSiteId: selectedSiteId.value,
-    ...notifyForm.value,
-    schedules: (notifyForm.value.schedules || []).map(s => ({
-      start_time: s.startTime || s.startTimeObj || '',
-      end_time: s.endTime || s.endTimeObj || '',
-      interval_minutes: s.intervalMinutes || 30
+    enabled: notifyForm.value.enabled,
+    notificationType: notifyForm.value.notificationType,
+    webhookUrl: notifyForm.value.webhookUrl,
+    signKey: notifyForm.value.signKey,
+    weworkWebhookUrl: notifyForm.value.weworkWebhookUrl,
+    refreshChannels: notifyForm.value.refreshChannels,
+    monitoringGroups: groups.map(g => ({
+      name: g.name,
+      channelIds: g.channelIds,
+      statusFilter: g.statusFilter,
+      autoToggle: g.autoToggle,
+      anyModelSuccess: g.anyModelSuccess,
+      slowThresholdMs: g.slowThresholdMs,
+      skipStatusCodes: (g.skipStatusCodesStr || '').split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n)),
+      schedules: (g.schedules || []).map(s => ({
+        start_time: s.startTime || s.startTimeObj || '',
+        end_time: s.endTime || s.endTimeObj || '',
+        interval_minutes: s.intervalMinutes || 30
+      }))
     }))
   }
   try {
@@ -1068,13 +1155,14 @@ const testNotifyPush = async () => {
 }
 
 const runNotifyPush = async () => {
-  if (!notifyForm.value.channelIds.length) {
-    ElMessage.warning('请先配置生效渠道 ID 并保存')
+  const hasChannels = notifyForm.value.monitoringGroups.some(g => g.channelIds.length > 0)
+  if (!hasChannels) {
+    ElMessage.warning('请先配置监测组的生效渠道 ID 并保存')
     return
   }
   try {
     await ElMessageBox.confirm(
-      '将拉取最新渠道信息、测试指定渠道、并推送测试成功的渠道通知，确认执行？',
+      '将拉取最新渠道信息、测试所有监测组的指定渠道、并推送通知，确认执行？',
       '执行推送',
       { confirmButtonText: '执行', cancelButtonText: '取消', type: 'info' }
     )
@@ -1088,22 +1176,7 @@ const runNotifyPush = async () => {
       headers: authHeaders()
     })
     const data = res.data || {}
-    if (data.notified) {
-      ElMessage.success(data.message + ' - 通知已推送')
-    } else if (data.success === 0) {
-      ElMessage.warning(data.message + ' - 无成功渠道，未推送')
-    } else {
-      ElMessage.info(data.message)
-    }
-    if (data.notifyError) {
-      ElMessage.error('推送失败: ' + data.notifyError)
-    }
-    const missing = data.missingIds || []
-    notifyMissingIds.value = missing
-
-    if (data.results && data.results.length) {
-      applyTestResults(data.results)
-    }
+    ElMessage.success(data.message || '执行完成')
     await loadChannels()
   } catch (err) {
     ElMessage.error(err.response?.data?.error || '执行推送失败')
@@ -1383,6 +1456,21 @@ onMounted(async () => {
 
 .notify-missing-tags {
   margin-top: 8px;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.group-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+.group-subtitle {
+  margin-left: 10px;
+  color: #909399;
+  font-size: 12px;
 }
 
 .notify-channel-picker {
