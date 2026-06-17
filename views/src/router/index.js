@@ -6,6 +6,8 @@ import ModelDetection from '../views/ModelDetection.vue'
 import ChannelAvailability from '../views/ChannelAvailability.vue'
 import UpstreamSites from '../views/UpstreamSites.vue'
 import CodexBalance from '../views/CodexBalance.vue'
+import UpstreamLogs from '../views/UpstreamLogs.vue'
+import UpstreamStats from '../views/UpstreamStats.vue'
 
 const routes = [
   {
@@ -46,6 +48,16 @@ const routes = [
         path: 'codex-balance',
         name: 'CodexBalance',
         component: CodexBalance
+      },
+      {
+        path: 'upstream-logs',
+        name: 'UpstreamLogs',
+        component: UpstreamLogs
+      },
+      {
+        path: 'upstream-stats',
+        name: 'UpstreamStats',
+        component: UpstreamStats
       }
     ]
   }

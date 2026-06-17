@@ -33,6 +33,14 @@
           <el-icon><Cpu /></el-icon>
           <span>Codex 号池</span>
         </el-menu-item>
+        <el-menu-item index="/upstream-logs">
+          <el-icon><Document /></el-icon>
+          <span>上游日志</span>
+        </el-menu-item>
+        <el-menu-item index="/upstream-stats">
+          <el-icon><DataAnalysis /></el-icon>
+          <span>分组统计</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -74,6 +82,20 @@
           >
             Codex
           </el-button>
+          <el-button
+            :type="route.path === '/upstream-logs' ? 'primary' : 'default'"
+            :icon="Document"
+            @click="router.push('/upstream-logs')"
+          >
+            日志
+          </el-button>
+          <el-button
+            :type="route.path === '/upstream-stats' ? 'primary' : 'default'"
+            :icon="DataAnalysis"
+            @click="router.push('/upstream-stats')"
+          >
+            统计
+          </el-button>
         </div>
         <div class="header-title">
           <h1>{{ pageTitle }}</h1>
@@ -113,7 +135,7 @@
 <script setup>
 import { computed, ref, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Coin, Monitor, Connection, OfficeBuilding, Cpu, SwitchButton, Lock } from '@element-plus/icons-vue'
+import { Coin, Monitor, Connection, OfficeBuilding, Cpu, SwitchButton, Lock, Document, DataAnalysis } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 
@@ -125,6 +147,8 @@ const pageMeta = {
   '/channel-availability': { title: '上游渠道可用性检测', description: '获取上游渠道列表，批量检测渠道可用性' },
   '/upstream-sites': { title: '上游站点管理', description: '管理上游 API 站点的鉴权配置' },
   '/codex-balance': { title: 'Codex 号池余额', description: '查询 Codex 号池各账号配额使用情况' },
+  '/upstream-logs': { title: '上游站点日志', description: '查询各上游站点的请求日志' },
+  '/upstream-stats': { title: '分组成功率统计', description: '按分组聚合上游日志，查看各分组和模型的成功率' },
 }
 
 const pageTitle = computed(() => pageMeta[route.path]?.title || '余额管理')

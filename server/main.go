@@ -76,6 +76,9 @@ func main() {
 			protected.GET("/codex/config", handlers.GetCodexConfigHandler)
 			protected.PUT("/codex/config", handlers.SaveCodexConfigHandler)
 			protected.POST("/codex/query", handlers.QueryCodexBalanceHandler)
+			protected.GET("/upstream-logs", handlers.QueryUpstreamLogsHandler)
+			protected.GET("/upstream-log-stats", handlers.QueryUpstreamLogStatsHandler)
+			protected.GET("/upstream-groups", handlers.QueryUpstreamGroupsHandler)
 			protected.Any("/proxy", handlers.ProxyHandler)
 		}
 	}
