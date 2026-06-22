@@ -101,10 +101,13 @@ type logStatsResponse struct {
 }
 
 func fetchLogPage(ctx context.Context, baseURL, token, userID string,
-	page, pageSize int, startTS, endTS, group string) ([]upstreamLogItem, error) {
+	page, pageSize int, startTS, endTS, group string, logType ...int) ([]upstreamLogItem, error) {
 
 	targetURL := fmt.Sprintf("%s/api/log/?p=%d&page_size=%d&start_timestamp=%s&end_timestamp=%s",
 		baseURL, page, pageSize, startTS, endTS)
+	if len(logType) > 0 && logType[0] > 0 {
+		targetURL += "&type=" + strconv.Itoa(logType[0])
+	}
 	if group != "" {
 		targetURL += "&group=" + url.QueryEscape(group)
 	}
