@@ -80,6 +80,10 @@ func main() {
 			protected.GET("/upstream-log-stats", handlers.QueryUpstreamLogStatsHandler)
 			protected.GET("/upstream-groups", handlers.QueryUpstreamGroupsHandler)
 			protected.Any("/proxy", handlers.ProxyHandler)
+			protected.GET("/dashboard/config", handlers.GetDashboardConfigHandler)
+			protected.PUT("/dashboard/config", handlers.SaveDashboardConfigHandler)
+			protected.GET("/dashboard/stats", handlers.GetDashboardStatsHandler)
+			protected.POST("/dashboard/compute", handlers.ComputeDashboardStatsHandler)
 		}
 	}
 

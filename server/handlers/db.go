@@ -30,6 +30,8 @@ var (
 	UpstreamChannelCol                 *mongo.Collection
 	ChannelTestResultCol         *mongo.Collection
 	CodexConfigCol               *mongo.Collection
+	SiteDailyStatsCol            *mongo.Collection
+	DashboardConfigCol           *mongo.Collection
 )
 
 type mongoConfigFile struct {
@@ -73,6 +75,12 @@ func InitDB() error {
 	UpstreamChannelCol = db.Collection("upstream_channels")
 	ChannelTestResultCol = db.Collection("channel_test_results")
 	CodexConfigCol = db.Collection("codex_configs")
+	SiteDailyStatsCol = db.Collection("site_daily_stats")
+	DashboardConfigCol = db.Collection("dashboard_config")
+
+	if err := ensureDashboardIndexes(ctx); err != nil {
+		return fmt.Errorf("dashboard index creation failed: %w", err)
+	}
 
 	if err := migrateToUpstreamSites(ctx); err != nil {
 		return fmt.Errorf("upstream sites migration failed: %w", err)
@@ -85,6 +93,14 @@ func InitDB() error {
 	}
 
 	return nil
+}
+
+func ensureDashboardIndexes(ctx context.Context) error {
+	_, err := SiteDailyStatsCol.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "upstream_site_id", Value: 1}, {Key: "date", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	})
+	return err
 }
 
 func MongoConnectionSettings() (string, string, error) {

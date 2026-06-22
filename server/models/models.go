@@ -200,6 +200,34 @@ type CodexConfig struct {
 	UpdatedAt  time.Time `bson:"updated_at" json:"updatedAt"`
 }
 
+type DashboardRankItem struct {
+	Name  string `bson:"name" json:"name"`
+	Quota int64  `bson:"quota" json:"quota"`
+	Count int    `bson:"count" json:"count"`
+}
+
+type SiteDailyStats struct {
+	ID                primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	UpstreamSiteID    primitive.ObjectID `bson:"upstream_site_id" json:"upstreamSiteId"`
+	SiteName          string             `bson:"site_name" json:"siteName"`
+	Date              string             `bson:"date" json:"date"`
+	TotalQuota        int64              `bson:"total_quota" json:"totalQuota"`
+	SuccessCount      int                `bson:"success_count" json:"successCount"`
+	ErrorCount        int                `bson:"error_count" json:"errorCount"`
+	TotalCount        int                `bson:"total_count" json:"totalCount"`
+	ModelRanking      []DashboardRankItem `bson:"model_ranking" json:"modelRanking"`
+	ChannelRanking    []DashboardRankItem `bson:"channel_ranking" json:"channelRanking"`
+	UserRanking       []DashboardRankItem `bson:"user_ranking" json:"userRanking"`
+	ErrorModelRanking []DashboardRankItem `bson:"error_model_ranking" json:"errorModelRanking"`
+	ComputedAt        time.Time           `bson:"computed_at" json:"computedAt"`
+}
+
+type DashboardConfig struct {
+	ID        string    `bson:"_id,omitempty" json:"-"`
+	StartDate string    `bson:"start_date" json:"startDate"`
+	UpdatedAt time.Time `bson:"updated_at" json:"updatedAt"`
+}
+
 type ModelDetectionJob struct {
 	ID             primitive.ObjectID     `bson:"_id,omitempty" json:"id"`
 	SiteID         primitive.ObjectID     `bson:"site_id" json:"siteId"`

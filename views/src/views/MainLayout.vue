@@ -13,6 +13,10 @@
         :default-active="route.path"
         router
       >
+        <el-menu-item index="/dashboard">
+          <el-icon><Odometer /></el-icon>
+          <span>管理面板</span>
+        </el-menu-item>
         <el-menu-item index="/balance">
           <el-icon><Coin /></el-icon>
           <span>余额管理</span>
@@ -47,6 +51,13 @@
     <el-container>
       <el-header class="app-header">
         <div class="mobile-nav">
+          <el-button
+            :type="route.path === '/dashboard' ? 'primary' : 'default'"
+            :icon="Odometer"
+            @click="router.push('/dashboard')"
+          >
+            面板
+          </el-button>
           <el-button
             :type="route.path === '/balance' ? 'primary' : 'default'"
             :icon="Coin"
@@ -135,7 +146,7 @@
 <script setup>
 import { computed, ref, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Coin, Monitor, Connection, OfficeBuilding, Cpu, SwitchButton, Lock, Document, DataAnalysis } from '@element-plus/icons-vue'
+import { Coin, Monitor, Connection, OfficeBuilding, Cpu, SwitchButton, Lock, Document, DataAnalysis, Odometer } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 
@@ -143,6 +154,7 @@ const route = useRoute()
 const router = useRouter()
 
 const pageMeta = {
+  '/dashboard': { title: '管理面板', description: '各站点今日消费统计与排行看板' },
   '/model-detection': { title: '模型真实性检测', description: '配置检测模型、提交 Veridrop 任务并跟踪报告' },
   '/channel-availability': { title: '上游渠道可用性检测', description: '获取上游渠道列表，批量检测渠道可用性' },
   '/upstream-sites': { title: '上游站点管理', description: '管理上游 API 站点的鉴权配置' },
