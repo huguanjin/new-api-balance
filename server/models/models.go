@@ -223,9 +223,10 @@ type SiteDailyStats struct {
 }
 
 type DashboardConfig struct {
-	ID        string    `bson:"_id,omitempty" json:"-"`
-	StartDate string    `bson:"start_date" json:"startDate"`
-	UpdatedAt time.Time `bson:"updated_at" json:"updatedAt"`
+	ID          string    `bson:"_id,omitempty" json:"-"`
+	StartDate   string    `bson:"start_date" json:"startDate"`
+	Concurrency int       `bson:"concurrency" json:"concurrency"`
+	UpdatedAt   time.Time `bson:"updated_at" json:"updatedAt"`
 }
 
 type ModelDetectionJob struct {

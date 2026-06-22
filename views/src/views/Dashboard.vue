@@ -135,6 +135,8 @@
             value-format="YYYY-MM-DD"
             style="width: 160px"
           />
+          <span class="config-label">请求并发数:</span>
+          <el-input-number v-model="concurrency" :min="1" :max="50" :step="1" style="width: 120px" />
           <el-select v-model="batchSiteId" placeholder="选择站点" style="width: 200px">
             <el-option label="全部站点" value="" />
             <el-option v-for="s in availableSites" :key="s.id" :label="s.name" :value="s.id" />
@@ -198,6 +200,7 @@ const availableSites = ref([])
 const selectedRankingSiteId = ref('__all__')
 
 const startDate = ref('')
+const concurrency = ref(5)
 const batchSiteId = ref('')
 const savingConfig = ref(false)
 const batchComputing = ref(false)
@@ -356,6 +359,7 @@ const loadConfig = async () => {
   try {
     const res = await axios.get('/api/dashboard/config', { headers: authHeaders() })
     startDate.value = res.data.startDate || ''
+    concurrency.value = res.data.concurrency || 5
   } catch { /* ignore */ }
 }
 
@@ -367,7 +371,7 @@ const saveConfig = async () => {
   savingConfig.value = true
   try {
     await axios.put('/api/dashboard/config',
-      { startDate: startDate.value },
+      { startDate: startDate.value, concurrency: concurrency.value },
       { headers: authHeaders() }
     )
     ElMessage.success('配置已保存')
