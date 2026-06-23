@@ -19,6 +19,8 @@
         <el-button type="success" :icon="VideoPlay" @click="computeToday" :loading="computing">
           {{ computing ? '计算中...' : '计算当日数据' }}
         </el-button>
+        <el-button type="warning" @click="openNotifyDialog">战绩推送设置</el-button>
+        <el-button type="info" @click="sendNow" :loading="pushingNow">立即推送</el-button>
       </div>
     </div>
 
@@ -168,6 +170,57 @@
         </template>
       </el-alert>
     </div>
+
+    <!-- Dashboard Notification Dialog -->
+    <el-dialog title="战绩推送设置" v-model="notifyDialogVisible" width="620px">
+      <el-form :model="notifyConfig" label-width="140px">
+        <el-form-item label="启用推送">
+          <el-switch v-model="notifyConfig.enabled" />
+        </el-form-item>
+        <el-form-item label="通知方式">
+          <el-radio-group v-model="notifyConfig.notification_type">
+            <el-radio value="feishu">飞书机器人</el-radio>
+            <el-radio value="wework">企业微信机器人</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="notifyConfig.notification_type === 'feishu'" label="飞书 Webhook URL">
+          <el-input v-model="notifyConfig.webhook_url" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxx" clearable />
+        </el-form-item>
+        <el-form-item v-if="notifyConfig.notification_type === 'feishu'" label="签名校验密钥">
+          <el-input v-model="notifyConfig.sign_key" placeholder="可选，飞书机器人安全设置中的签名校验" clearable />
+        </el-form-item>
+        <el-form-item v-if="notifyConfig.notification_type === 'wework'" label="企微 Webhook URL">
+          <el-input v-model="notifyConfig.wework_webhook_url" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx" clearable />
+        </el-form-item>
+        <el-form-item label="每日推送时间">
+          <el-time-picker v-model="notifyConfig.push_time" format="HH:mm" value-format="HH:mm" placeholder="08:00" />
+          <span style="margin-left: 8px; font-size: 12px; color: #909399;">每天在此时间推送前一天的战绩</span>
+        </el-form-item>
+        <el-form-item label="排行显示数量">
+          <el-input-number v-model="notifyConfig.top_n" :min="3" :max="20" />
+        </el-form-item>
+        <el-form-item label="自动计算">
+          <el-switch v-model="notifyConfig.auto_compute" />
+          <span style="margin-left: 8px; font-size: 12px; color: #909399;">推送前自动计算前一天数据（如未计算过）</span>
+        </el-form-item>
+        <el-divider v-if="notifyConfig.last_attempt_at || notifyConfig.last_error" />
+        <el-form-item v-if="notifyConfig.last_attempt_at" label="上次尝试">
+          <span style="font-size: 13px; color: #606266;">{{ formatTime(notifyConfig.last_attempt_at) }}</span>
+        </el-form-item>
+        <el-form-item v-if="notifyConfig.last_sent_at" label="上次成功">
+          <span style="font-size: 13px; color: #67c23a;">{{ formatTime(notifyConfig.last_sent_at) }}</span>
+          <span v-if="notifyConfig.last_sent_date" style="margin-left: 8px; font-size: 12px; color: #909399;">（{{ notifyConfig.last_sent_date }}）</span>
+        </el-form-item>
+        <el-form-item v-if="notifyConfig.last_error" label="上次错误">
+          <span style="font-size: 13px; color: #f56c6c;">{{ notifyConfig.last_error }}</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="notifyDialogVisible = false">取消</el-button>
+        <el-button @click="testNotify" :loading="testingNotify">测试通知</el-button>
+        <el-button type="primary" @click="saveNotifyConfig" :loading="savingNotify">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -205,6 +258,25 @@ const batchSiteId = ref('')
 const savingConfig = ref(false)
 const batchComputing = ref(false)
 const batchResult = ref(null)
+
+const notifyDialogVisible = ref(false)
+const notifyConfig = ref({
+  enabled: false,
+  notification_type: 'feishu',
+  webhook_url: '',
+  sign_key: '',
+  wework_webhook_url: '',
+  push_time: '08:00',
+  top_n: 10,
+  auto_compute: false,
+  last_attempt_at: null,
+  last_sent_at: null,
+  last_sent_date: '',
+  last_error: ''
+})
+const savingNotify = ref(false)
+const testingNotify = ref(false)
+const pushingNow = ref(false)
 
 const formatQuota = (quota) => {
   if (quota == null || quota === undefined) return '¥0.00'
@@ -407,6 +479,85 @@ const batchCompute = async () => {
   } finally {
     batchComputing.value = false
   }
+}
+
+const formatTime = (t) => {
+  if (!t) return ''
+  const d = new Date(t)
+  if (isNaN(d.getTime())) return t
+  return d.toLocaleString('zh-CN', { hour12: false })
+}
+
+const loadNotifyConfig = async () => {
+  try {
+    const res = await axios.get('/api/dashboard/notification', { headers: authHeaders() })
+    notifyConfig.value = {
+      enabled: res.data.enabled || false,
+      notification_type: res.data.notification_type || 'feishu',
+      webhook_url: res.data.webhook_url || '',
+      sign_key: res.data.sign_key || '',
+      wework_webhook_url: res.data.wework_webhook_url || '',
+      push_time: res.data.push_time || '08:00',
+      top_n: res.data.top_n || 10,
+      auto_compute: res.data.auto_compute || false,
+      last_attempt_at: res.data.last_attempt_at,
+      last_sent_at: res.data.last_sent_at,
+      last_sent_date: res.data.last_sent_date || '',
+      last_error: res.data.last_error || ''
+    }
+  } catch { /* ignore */ }
+}
+
+const openNotifyDialog = async () => {
+  await loadNotifyConfig()
+  notifyDialogVisible.value = true
+}
+
+const saveNotifyConfig = async () => {
+  savingNotify.value = true
+  try {
+    await axios.put('/api/dashboard/notification', notifyConfig.value, { headers: authHeaders() })
+    ElMessage.success('推送配置已保存')
+    notifyDialogVisible.value = false
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '保存失败')
+  } finally {
+    savingNotify.value = false
+  }
+}
+
+const testNotify = async () => {
+  testingNotify.value = true
+  try {
+    await axios.post('/api/dashboard/notification/test', {}, { headers: authHeaders() })
+    ElMessage.success('测试通知发送成功')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '测试通知发送失败')
+  } finally {
+    testingNotify.value = false
+  }
+}
+
+const sendNow = async () => {
+  pushingNow.value = true
+  try {
+    const date = selectedDate.value || yesterdayLocal()
+    const res = await axios.post('/api/dashboard/notification/send-now', { date }, { headers: authHeaders(), timeout: 1800000 })
+    ElMessage.success(res.data.message || '推送成功')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '推送失败')
+  } finally {
+    pushingNow.value = false
+  }
+}
+
+const yesterdayLocal = () => {
+  const d = new Date()
+  d.setDate(d.getDate() - 1)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
 onMounted(async () => {

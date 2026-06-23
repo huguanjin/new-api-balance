@@ -30,8 +30,9 @@ var (
 	UpstreamChannelCol                 *mongo.Collection
 	ChannelTestResultCol         *mongo.Collection
 	CodexConfigCol               *mongo.Collection
-	SiteDailyStatsCol            *mongo.Collection
-	DashboardConfigCol           *mongo.Collection
+	SiteDailyStatsCol                *mongo.Collection
+	DashboardConfigCol               *mongo.Collection
+	DashboardNotificationConfigCol   *mongo.Collection
 )
 
 type mongoConfigFile struct {
@@ -77,6 +78,7 @@ func InitDB() error {
 	CodexConfigCol = db.Collection("codex_configs")
 	SiteDailyStatsCol = db.Collection("site_daily_stats")
 	DashboardConfigCol = db.Collection("dashboard_config")
+	DashboardNotificationConfigCol = db.Collection("dashboard_notification_config")
 
 	if err := ensureDashboardIndexes(ctx); err != nil {
 		return fmt.Errorf("dashboard index creation failed: %w", err)

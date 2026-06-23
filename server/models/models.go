@@ -229,6 +229,23 @@ type DashboardConfig struct {
 	UpdatedAt   time.Time `bson:"updated_at" json:"updatedAt"`
 }
 
+type DashboardNotificationConfig struct {
+	ID               string     `bson:"_id,omitempty" json:"-"`
+	Enabled          bool       `bson:"enabled" json:"enabled"`
+	NotificationType string     `bson:"notification_type" json:"notification_type"`
+	WebhookURL       string     `bson:"webhook_url" json:"webhook_url"`
+	SignKey          string     `bson:"sign_key" json:"sign_key"`
+	WeworkWebhookURL string     `bson:"wework_webhook_url" json:"wework_webhook_url"`
+	PushTime         string     `bson:"push_time" json:"push_time"`
+	TopN             int        `bson:"top_n" json:"top_n"`
+	AutoCompute      bool       `bson:"auto_compute" json:"auto_compute"`
+	LastAttemptAt    *time.Time `bson:"last_attempt_at,omitempty" json:"last_attempt_at,omitempty"`
+	LastSentAt       *time.Time `bson:"last_sent_at,omitempty" json:"last_sent_at,omitempty"`
+	LastSentDate     string     `bson:"last_sent_date" json:"last_sent_date"`
+	LastError        string     `bson:"last_error" json:"last_error"`
+	UpdatedAt        time.Time  `bson:"updated_at" json:"updated_at"`
+}
+
 type ModelDetectionJob struct {
 	ID             primitive.ObjectID     `bson:"_id,omitempty" json:"id"`
 	SiteID         primitive.ObjectID     `bson:"site_id" json:"siteId"`

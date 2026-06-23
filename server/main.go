@@ -20,6 +20,7 @@ func main() {
 	handlers.StartNotificationScheduler()
 	handlers.StartModelDetectionScheduler()
 	handlers.StartChannelAvailabilityScheduler()
+	handlers.StartDashboardNotificationScheduler()
 
 	r := gin.Default()
 	r.GET("/healthz", func(c *gin.Context) {
@@ -84,6 +85,10 @@ func main() {
 			protected.PUT("/dashboard/config", handlers.SaveDashboardConfigHandler)
 			protected.GET("/dashboard/stats", handlers.GetDashboardStatsHandler)
 			protected.POST("/dashboard/compute", handlers.ComputeDashboardStatsHandler)
+			protected.GET("/dashboard/notification", handlers.GetDashboardNotificationConfigHandler)
+			protected.PUT("/dashboard/notification", handlers.SaveDashboardNotificationConfigHandler)
+			protected.POST("/dashboard/notification/test", handlers.TestDashboardNotificationHandler)
+			protected.POST("/dashboard/notification/send-now", handlers.SendDashboardNotificationNowHandler)
 		}
 	}
 

@@ -361,6 +361,20 @@ func fetchUpstreamChannels(ctx context.Context, channelURL, token, userID string
 		return nil, fmt.Errorf("invalid upstream url: %w", err)
 	}
 
+	if !strings.Contains(parsed.Path, "/api/channel") {
+		parsed.Path = strings.TrimRight(parsed.Path, "/") + "/api/channel/"
+		query := parsed.Query()
+		if !query.Has("p") {
+			query.Set("p", "1")
+		}
+		if !query.Has("page_size") {
+			query.Set("page_size", "100")
+		}
+		parsed.RawQuery = query.Encode()
+		channelURL = parsed.String()
+		parsed, _ = url.Parse(channelURL)
+	}
+
 	query := parsed.Query()
 	shouldPaginate := query.Has("p") || query.Has("page_size")
 	if !shouldPaginate {
