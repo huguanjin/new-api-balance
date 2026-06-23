@@ -472,7 +472,7 @@ func autoComputeDashboardStats(ctx context.Context, date string) error {
 
 	for _, site := range sites {
 		log.Printf("[dashboard-notify] auto computing site=%s date=%s", site.Name, date)
-		stats, err := computeSiteStats(ctx, site, date, concurrency)
+		stats, err := computeSiteStats(ctx, site, date, concurrency, false)
 		if err != nil {
 			log.Printf("[dashboard-notify] compute error site=%s: %v", site.Name, err)
 			continue

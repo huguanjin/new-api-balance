@@ -85,6 +85,7 @@ func main() {
 			protected.PUT("/dashboard/config", handlers.SaveDashboardConfigHandler)
 			protected.GET("/dashboard/stats", handlers.GetDashboardStatsHandler)
 			protected.POST("/dashboard/compute", handlers.ComputeDashboardStatsHandler)
+			protected.GET("/dashboard/compute-status", handlers.GetComputeStatusHandler)
 			protected.GET("/dashboard/notification", handlers.GetDashboardNotificationConfigHandler)
 			protected.PUT("/dashboard/notification", handlers.SaveDashboardNotificationConfigHandler)
 			protected.POST("/dashboard/notification/test", handlers.TestDashboardNotificationHandler)

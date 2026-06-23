@@ -246,6 +246,41 @@ type DashboardNotificationConfig struct {
 	UpdatedAt        time.Time  `bson:"updated_at" json:"updated_at"`
 }
 
+type DashboardComputeTask struct {
+	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	UpstreamSiteID primitive.ObjectID `bson:"upstream_site_id" json:"upstreamSiteId"`
+	SiteName       string             `bson:"site_name" json:"siteName"`
+	Date           string             `bson:"date" json:"date"`
+
+	PaginationStatus        string `bson:"pagination_status" json:"paginationStatus"`
+	PaginationError         string `bson:"pagination_error,omitempty" json:"paginationError,omitempty"`
+	ModelRankingStatus      string `bson:"model_ranking_status" json:"modelRankingStatus"`
+	ModelRankingError       string `bson:"model_ranking_error,omitempty" json:"modelRankingError,omitempty"`
+	ChannelRankingStatus    string `bson:"channel_ranking_status" json:"channelRankingStatus"`
+	ChannelRankingError     string `bson:"channel_ranking_error,omitempty" json:"channelRankingError,omitempty"`
+	UserRankingStatus       string `bson:"user_ranking_status" json:"userRankingStatus"`
+	UserRankingError        string `bson:"user_ranking_error,omitempty" json:"userRankingError,omitempty"`
+	ErrorModelRankingStatus string `bson:"error_model_ranking_status" json:"errorModelRankingStatus"`
+	ErrorModelRankingError  string `bson:"error_model_ranking_error,omitempty" json:"errorModelRankingError,omitempty"`
+
+	StatQuota             int64            `bson:"stat_quota" json:"statQuota"`
+	PaginatedQuota        int64            `bson:"paginated_quota" json:"paginatedQuota"`
+	SuccessCount          int              `bson:"success_count" json:"successCount"`
+	PaginatedModelQuota   map[string]int64 `bson:"paginated_model_quota,omitempty" json:"-"`
+	PaginatedChannelQuota map[string]int64 `bson:"paginated_channel_quota,omitempty" json:"-"`
+	ChannelIDToName       map[string]string `bson:"channel_id_to_name,omitempty" json:"-"`
+	PaginatedUserQuota    map[string]int64 `bson:"paginated_user_quota,omitempty" json:"-"`
+
+	ModelRanking      []DashboardRankItem `bson:"model_ranking,omitempty" json:"modelRanking,omitempty"`
+	ChannelRanking    []DashboardRankItem `bson:"channel_ranking,omitempty" json:"channelRanking,omitempty"`
+	UserRanking       []DashboardRankItem `bson:"user_ranking,omitempty" json:"userRanking,omitempty"`
+	ErrorCount        int                 `bson:"error_count" json:"errorCount"`
+	ErrorModelRanking []DashboardRankItem `bson:"error_model_ranking,omitempty" json:"errorModelRanking,omitempty"`
+
+	CreatedAt time.Time `bson:"created_at" json:"createdAt"`
+	UpdatedAt time.Time `bson:"updated_at" json:"updatedAt"`
+}
+
 type ModelDetectionJob struct {
 	ID             primitive.ObjectID     `bson:"_id,omitempty" json:"id"`
 	SiteID         primitive.ObjectID     `bson:"site_id" json:"siteId"`

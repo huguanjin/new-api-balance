@@ -157,12 +157,19 @@ func refineRankingViaStat(ctx context.Context, baseURL, token, userID string, st
 	return buildQuotaRanking(quotaMap, 10)
 }
 
-func computeSiteStats(ctx context.Context, site models.UpstreamSite, date string, concurrency int) (*models.SiteDailyStats, error) {
+type siteConnInfo struct {
+	BaseURL string
+	Token   string
+	UserID  string
+	StartTS int64
+	EndTS   int64
+}
+
+func parseSiteConn(site models.UpstreamSite, date string) (*siteConnInfo, error) {
 	startTS, endTS, err := dateToTimestamps(date)
 	if err != nil {
 		return nil, fmt.Errorf("日期格式错误: %w", err)
 	}
-
 	siteURL := strings.TrimSpace(site.URL)
 	if siteURL == "" {
 		return nil, fmt.Errorf("站点 URL 未配置")
@@ -171,17 +178,64 @@ func computeSiteStats(ctx context.Context, site models.UpstreamSite, date string
 	if err != nil || parsed.Host == "" {
 		return nil, fmt.Errorf("站点 URL 无效")
 	}
-	baseURL := fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host)
-
 	token := strings.TrimSpace(site.Token)
 	if token == "" {
 		return nil, fmt.Errorf("站点 Token 未配置")
 	}
-	userID := strings.TrimSpace(site.UserID)
+	return &siteConnInfo{
+		BaseURL: fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host),
+		Token:   token,
+		UserID:  strings.TrimSpace(site.UserID),
+		StartTS: startTS,
+		EndTS:   endTS,
+	}, nil
+}
 
-	statQuota, err := fetchLogStat(ctx, baseURL, token, userID, startTS, endTS)
+func findOrCreateComputeTask(ctx context.Context, siteID primitive.ObjectID, siteName, date string) (*models.DashboardComputeTask, error) {
+	filter := bson.M{"upstream_site_id": siteID, "date": date}
+	var task models.DashboardComputeTask
+	err := DashboardComputeTaskCol.FindOne(ctx, filter).Decode(&task)
+	if err == nil {
+		return &task, nil
+	}
+
+	now := time.Now()
+	task = models.DashboardComputeTask{
+		UpstreamSiteID:          siteID,
+		SiteName:                siteName,
+		Date:                    date,
+		PaginationStatus:        "pending",
+		ModelRankingStatus:      "pending",
+		ChannelRankingStatus:    "pending",
+		UserRankingStatus:       "pending",
+		ErrorModelRankingStatus: "pending",
+		CreatedAt:               now,
+		UpdatedAt:               now,
+	}
+	res, err := DashboardComputeTaskCol.InsertOne(ctx, task)
 	if err != nil {
-		log.Printf("[dashboard] fetchLogStat failed for site=%s date=%s: %v, falling back to pagination", site.Name, date, err)
+		return nil, fmt.Errorf("创建计算任务失败: %w", err)
+	}
+	task.ID = res.InsertedID.(primitive.ObjectID)
+	return &task, nil
+}
+
+func updateTaskStepStatus(ctx context.Context, taskID primitive.ObjectID, statusField, status, errorField, errMsg string) {
+	update := bson.M{statusField: status, "updated_at": time.Now()}
+	if errMsg != "" {
+		update[errorField] = errMsg
+	} else {
+		update[errorField] = ""
+	}
+	DashboardComputeTaskCol.UpdateByID(ctx, taskID, bson.M{"$set": update})
+}
+
+func runPaginationStep(ctx context.Context, task *models.DashboardComputeTask, conn *siteConnInfo, concurrency int) error {
+	updateTaskStepStatus(ctx, task.ID, "pagination_status", "running", "pagination_error", "")
+
+	statQuota, err := fetchLogStat(ctx, conn.BaseURL, conn.Token, conn.UserID, conn.StartTS, conn.EndTS)
+	if err != nil {
+		log.Printf("[dashboard] fetchLogStat failed for site=%s date=%s: %v, falling back to pagination", task.SiteName, task.Date, err)
 	}
 
 	const (
@@ -191,10 +245,10 @@ func computeSiteStats(ctx context.Context, site models.UpstreamSite, date string
 
 	type timeSlice struct{ start, end int64 }
 	var slices []timeSlice
-	for s := startTS; s < endTS; s += sliceDuration {
+	for s := conn.StartTS; s < conn.EndTS; s += sliceDuration {
 		e := s + sliceDuration
-		if e > endTS {
-			e = endTS
+		if e > conn.EndTS {
+			e = conn.EndTS
 		}
 		slices = append(slices, timeSlice{s, e})
 	}
@@ -215,8 +269,8 @@ func computeSiteStats(ctx context.Context, site models.UpstreamSite, date string
 			slEnd := strconv.FormatInt(s.end, 10)
 
 			for p := 1; p <= maxPagesPerSlice; p++ {
-				items, err := fetchLogPage(ctx, baseURL, token, userID, p, logStatsPageSize, slStart, slEnd, "", 2)
-				if err != nil {
+				items, fetchErr := fetchLogPage(ctx, conn.BaseURL, conn.Token, conn.UserID, p, logStatsPageSize, slStart, slEnd, "", 2)
+				if fetchErr != nil {
 					return
 				}
 				atomic.AddInt64(&totalPages, 1)
@@ -239,8 +293,8 @@ func computeSiteStats(ctx context.Context, site models.UpstreamSite, date string
 	var paginatedQuota int64
 	var totalCount int
 	paginatedModelQuota := map[string]int64{}
-	paginatedChannelQuota := map[int]int64{}
-	channelIDToName := map[int]string{}
+	paginatedChannelQuota := map[string]int64{}
+	channelIDToName := map[string]string{}
 	paginatedUserQuota := map[string]int64{}
 
 	for items := range itemsCh {
@@ -256,27 +310,55 @@ func computeSiteStats(ctx context.Context, site models.UpstreamSite, date string
 			if username == "" {
 				username = "(anonymous)"
 			}
+			chKey := strconv.Itoa(item.Channel)
 
 			paginatedModelQuota[modelName] += item.Quota
-			paginatedChannelQuota[item.Channel] += item.Quota
+			paginatedChannelQuota[chKey] += item.Quota
 			if item.ChannelName != "" {
-				channelIDToName[item.Channel] = item.ChannelName
+				channelIDToName[chKey] = item.ChannelName
 			}
 			paginatedUserQuota[username] += item.Quota
 		}
 	}
 
-	totalQuota := statQuota
-	if totalQuota == 0 {
-		totalQuota = paginatedQuota
+	now := time.Now()
+	update := bson.M{
+		"pagination_status":       "completed",
+		"pagination_error":        "",
+		"stat_quota":              statQuota,
+		"paginated_quota":         paginatedQuota,
+		"success_count":           totalCount,
+		"paginated_model_quota":   paginatedModelQuota,
+		"paginated_channel_quota": paginatedChannelQuota,
+		"channel_id_to_name":      channelIDToName,
+		"paginated_user_quota":    paginatedUserQuota,
+		"updated_at":              now,
+	}
+	_, err = DashboardComputeTaskCol.UpdateByID(ctx, task.ID, bson.M{"$set": update})
+	if err != nil {
+		updateTaskStepStatus(ctx, task.ID, "pagination_status", "failed", "pagination_error", err.Error())
+		return fmt.Errorf("保存分页数据失败: %w", err)
 	}
 
-	// 模型排行：先用分页数据筛出前20名候选，再用 /api/log/stat 获取精确值
-	roughModelTop := buildQuotaRanking(paginatedModelQuota, 20)
+	task.StatQuota = statQuota
+	task.PaginatedQuota = paginatedQuota
+	task.SuccessCount = totalCount
+	task.PaginatedModelQuota = paginatedModelQuota
+	task.PaginatedChannelQuota = paginatedChannelQuota
+	task.ChannelIDToName = channelIDToName
+	task.PaginatedUserQuota = paginatedUserQuota
+	task.PaginationStatus = "completed"
+	return nil
+}
+
+func runModelRankingStep(ctx context.Context, task *models.DashboardComputeTask, conn *siteConnInfo, concurrency int) error {
+	updateTaskStepStatus(ctx, task.ID, "model_ranking_status", "running", "model_ranking_error", "")
+
+	roughModelTop := buildQuotaRanking(task.PaginatedModelQuota, 20)
 	log.Printf("[dashboard] 模型排行: 分页筛出 %d 个候选模型，用 /api/log/stat 获取精确值", len(roughModelTop))
-	finalModelRanking := refineRankingViaStat(ctx, baseURL, token, userID, startTS, endTS, roughModelTop, fetchLogStatWithModel, "模型排行", concurrency)
+	finalModelRanking := refineRankingViaStat(ctx, conn.BaseURL, conn.Token, conn.UserID, conn.StartTS, conn.EndTS, roughModelTop, fetchLogStatWithModel, "模型排行", concurrency)
 	if finalModelRanking == nil {
-		finalModelRanking = buildQuotaRanking(paginatedModelQuota, 10)
+		finalModelRanking = buildQuotaRanking(task.PaginatedModelQuota, 10)
 		log.Printf("[dashboard] 模型排行: stat 全部失败，使用分页统计(fallback)")
 	} else {
 		log.Printf("[dashboard] 模型排行: 使用 /api/log/stat 精确值, 共 %d 个模型", len(finalModelRanking))
@@ -285,19 +367,36 @@ func computeSiteStats(ctx context.Context, site models.UpstreamSite, date string
 		}
 	}
 
-	// 渠道排行：先用分页数据筛出前20名渠道，再用 /api/log/stat 获取精确值
+	_, err := DashboardComputeTaskCol.UpdateByID(ctx, task.ID, bson.M{"$set": bson.M{
+		"model_ranking_status": "completed",
+		"model_ranking_error":  "",
+		"model_ranking":        finalModelRanking,
+		"updated_at":           time.Now(),
+	}})
+	if err != nil {
+		updateTaskStepStatus(ctx, task.ID, "model_ranking_status", "failed", "model_ranking_error", err.Error())
+		return err
+	}
+	task.ModelRanking = finalModelRanking
+	task.ModelRankingStatus = "completed"
+	return nil
+}
+
+func runChannelRankingStep(ctx context.Context, task *models.DashboardComputeTask, conn *siteConnInfo, concurrency int) error {
+	updateTaskStepStatus(ctx, task.ID, "channel_ranking_status", "running", "channel_ranking_error", "")
+
 	type channelCandidate struct {
-		ID    int
+		ID    string
 		Name  string
 		Quota int64
 	}
 	var channelCandidates []channelCandidate
-	for chID, quota := range paginatedChannelQuota {
-		name := channelIDToName[chID]
+	for chKey, quota := range task.PaginatedChannelQuota {
+		name := task.ChannelIDToName[chKey]
 		if name == "" {
-			name = fmt.Sprintf("渠道#%d", chID)
+			name = fmt.Sprintf("渠道#%s", chKey)
 		}
-		channelCandidates = append(channelCandidates, channelCandidate{ID: chID, Name: name, Quota: quota})
+		channelCandidates = append(channelCandidates, channelCandidate{ID: chKey, Name: name, Quota: quota})
 	}
 	sort.Slice(channelCandidates, func(i, j int) bool {
 		return channelCandidates[i].Quota > channelCandidates[j].Quota
@@ -319,15 +418,14 @@ func computeSiteStats(ctx context.Context, site models.UpstreamSite, date string
 		var chWg sync.WaitGroup
 		for _, cc := range channelCandidates {
 			chWg.Add(1)
-			go func(id int, name string) {
+			go func(id, name string) {
 				defer chWg.Done()
 				chSem <- struct{}{}
 				defer func() { <-chSem }()
 
-				chID := strconv.Itoa(id)
-				quota, err := fetchLogStatWithChannel(ctx, baseURL, token, userID, startTS, endTS, chID)
-				if err != nil {
-					log.Printf("[dashboard] 渠道排行 stat(channel=%d/%s) error: %v", id, name, err)
+				quota, fetchErr := fetchLogStatWithChannel(ctx, conn.BaseURL, conn.Token, conn.UserID, conn.StartTS, conn.EndTS, id)
+				if fetchErr != nil {
+					log.Printf("[dashboard] 渠道排行 stat(channel=%s/%s) error: %v", id, name, fetchErr)
 					return
 				}
 				if quota > 0 {
@@ -351,10 +449,10 @@ func computeSiteStats(ctx context.Context, site models.UpstreamSite, date string
 		log.Printf("[dashboard] 渠道排行: 使用 /api/log/stat 精确值, 共 %d 个渠道", len(finalChannelRanking))
 	} else {
 		fallbackMap := map[string]int64{}
-		for chID, quota := range paginatedChannelQuota {
-			name := channelIDToName[chID]
+		for chKey, quota := range task.PaginatedChannelQuota {
+			name := task.ChannelIDToName[chKey]
 			if name == "" {
-				name = fmt.Sprintf("渠道#%d", chID)
+				name = fmt.Sprintf("渠道#%s", chKey)
 			}
 			fallbackMap[name] = quota
 		}
@@ -362,19 +460,69 @@ func computeSiteStats(ctx context.Context, site models.UpstreamSite, date string
 		log.Printf("[dashboard] 渠道排行: stat 全部失败，使用分页统计(fallback)")
 	}
 
-	// 用户排行：先用分页数据筛出前20名候选，再用 /api/log/stat 获取精确值
-	roughUserTop := buildQuotaRanking(paginatedUserQuota, 20)
+	_, err := DashboardComputeTaskCol.UpdateByID(ctx, task.ID, bson.M{"$set": bson.M{
+		"channel_ranking_status": "completed",
+		"channel_ranking_error":  "",
+		"channel_ranking":        finalChannelRanking,
+		"updated_at":             time.Now(),
+	}})
+	if err != nil {
+		updateTaskStepStatus(ctx, task.ID, "channel_ranking_status", "failed", "channel_ranking_error", err.Error())
+		return err
+	}
+	task.ChannelRanking = finalChannelRanking
+	task.ChannelRankingStatus = "completed"
+	return nil
+}
+
+func runUserRankingStep(ctx context.Context, task *models.DashboardComputeTask, conn *siteConnInfo, concurrency int) error {
+	updateTaskStepStatus(ctx, task.ID, "user_ranking_status", "running", "user_ranking_error", "")
+
+	roughUserTop := buildQuotaRanking(task.PaginatedUserQuota, 20)
 	log.Printf("[dashboard] 用户排行: 分页筛出 %d 个候选用户，用 /api/log/stat 获取精确值", len(roughUserTop))
-	finalUserRanking := refineRankingViaStat(ctx, baseURL, token, userID, startTS, endTS, roughUserTop, fetchLogStatWithUsername, "用户排行", concurrency)
+	finalUserRanking := refineRankingViaStat(ctx, conn.BaseURL, conn.Token, conn.UserID, conn.StartTS, conn.EndTS, roughUserTop, fetchLogStatWithUsername, "用户排行", concurrency)
 	if finalUserRanking == nil {
-		finalUserRanking = buildQuotaRanking(paginatedUserQuota, 10)
+		finalUserRanking = buildQuotaRanking(task.PaginatedUserQuota, 10)
 		log.Printf("[dashboard] 用户排行: stat 全部失败，使用分页统计(fallback)")
 	} else {
 		log.Printf("[dashboard] 用户排行: 使用 /api/log/stat 精确值, 共 %d 个用户", len(finalUserRanking))
 	}
 
-	// 错误模型排行：分页拉取 type=5 日志，统计每个模型的错误次数
+	_, err := DashboardComputeTaskCol.UpdateByID(ctx, task.ID, bson.M{"$set": bson.M{
+		"user_ranking_status": "completed",
+		"user_ranking_error":  "",
+		"user_ranking":        finalUserRanking,
+		"updated_at":          time.Now(),
+	}})
+	if err != nil {
+		updateTaskStepStatus(ctx, task.ID, "user_ranking_status", "failed", "user_ranking_error", err.Error())
+		return err
+	}
+	task.UserRanking = finalUserRanking
+	task.UserRankingStatus = "completed"
+	return nil
+}
+
+func runErrorModelRankingStep(ctx context.Context, task *models.DashboardComputeTask, conn *siteConnInfo, concurrency int) error {
+	updateTaskStepStatus(ctx, task.ID, "error_model_ranking_status", "running", "error_model_ranking_error", "")
+
 	log.Printf("[dashboard] 错误模型排行: 开始拉取 type=5 日志")
+
+	const (
+		sliceDuration    int64 = 5 * 60
+		maxPagesPerSlice       = 10
+	)
+
+	type timeSlice struct{ start, end int64 }
+	var slices []timeSlice
+	for s := conn.StartTS; s < conn.EndTS; s += sliceDuration {
+		e := s + sliceDuration
+		if e > conn.EndTS {
+			e = conn.EndTS
+		}
+		slices = append(slices, timeSlice{s, e})
+	}
+
 	errorItemsCh := make(chan []upstreamLogItem, len(slices))
 	errorSem := make(chan struct{}, concurrency)
 	var errorWg sync.WaitGroup
@@ -390,8 +538,8 @@ func computeSiteStats(ctx context.Context, site models.UpstreamSite, date string
 			slEnd := strconv.FormatInt(s.end, 10)
 
 			for p := 1; p <= maxPagesPerSlice; p++ {
-				items, err := fetchLogPage(ctx, baseURL, token, userID, p, logStatsPageSize, slStart, slEnd, "", 5)
-				if err != nil {
+				items, fetchErr := fetchLogPage(ctx, conn.BaseURL, conn.Token, conn.UserID, p, logStatsPageSize, slStart, slEnd, "", 5)
+				if fetchErr != nil {
 					return
 				}
 				if len(items) == 0 {
@@ -425,20 +573,168 @@ func computeSiteStats(ctx context.Context, site models.UpstreamSite, date string
 	finalErrorModelRanking := buildCountRanking(errorModelCount, 10)
 	log.Printf("[dashboard] 错误模型排行: 共 %d 条错误日志, %d 个模型, 取前 %d", totalErrorCount, len(errorModelCount), len(finalErrorModelRanking))
 
+	_, err := DashboardComputeTaskCol.UpdateByID(ctx, task.ID, bson.M{"$set": bson.M{
+		"error_model_ranking_status": "completed",
+		"error_model_ranking_error":  "",
+		"error_count":                totalErrorCount,
+		"error_model_ranking":        finalErrorModelRanking,
+		"updated_at":                 time.Now(),
+	}})
+	if err != nil {
+		updateTaskStepStatus(ctx, task.ID, "error_model_ranking_status", "failed", "error_model_ranking_error", err.Error())
+		return err
+	}
+	task.ErrorCount = totalErrorCount
+	task.ErrorModelRanking = finalErrorModelRanking
+	task.ErrorModelRankingStatus = "completed"
+	return nil
+}
+
+func computeSiteStats(ctx context.Context, site models.UpstreamSite, date string, concurrency int, force bool) (*models.SiteDailyStats, error) {
+	conn, err := parseSiteConn(site, date)
+	if err != nil {
+		return nil, err
+	}
+
+	task, err := findOrCreateComputeTask(ctx, site.ID, site.Name, date)
+	if err != nil {
+		return nil, err
+	}
+
+	if force {
+		DashboardComputeTaskCol.UpdateByID(ctx, task.ID, bson.M{"$set": bson.M{
+			"pagination_status":          "pending",
+			"pagination_error":           "",
+			"model_ranking_status":       "pending",
+			"model_ranking_error":        "",
+			"channel_ranking_status":     "pending",
+			"channel_ranking_error":      "",
+			"user_ranking_status":        "pending",
+			"user_ranking_error":         "",
+			"error_model_ranking_status": "pending",
+			"error_model_ranking_error":  "",
+			"updated_at":                 time.Now(),
+		}})
+		task.PaginationStatus = "pending"
+		task.ModelRankingStatus = "pending"
+		task.ChannelRankingStatus = "pending"
+		task.UserRankingStatus = "pending"
+		task.ErrorModelRankingStatus = "pending"
+	}
+
+	var stepErrors []string
+
+	// 步骤1: 分页数据采集
+	if task.PaginationStatus != "completed" {
+		if err := runPaginationStep(ctx, task, conn, concurrency); err != nil {
+			stepErrors = append(stepErrors, fmt.Sprintf("分页采集: %v", err))
+			updateTaskStepStatus(ctx, task.ID, "pagination_status", "failed", "pagination_error", err.Error())
+		}
+	} else {
+		log.Printf("[dashboard] 跳过已完成步骤: 分页数据采集")
+	}
+
+	// 步骤2-4 依赖步骤1
+	if task.PaginationStatus == "completed" {
+		if task.ModelRankingStatus != "completed" {
+			if err := runModelRankingStep(ctx, task, conn, concurrency); err != nil {
+				stepErrors = append(stepErrors, fmt.Sprintf("模型排行: %v", err))
+				updateTaskStepStatus(ctx, task.ID, "model_ranking_status", "failed", "model_ranking_error", err.Error())
+			}
+		} else {
+			log.Printf("[dashboard] 跳过已完成步骤: 模型排行")
+		}
+
+		if task.ChannelRankingStatus != "completed" {
+			if err := runChannelRankingStep(ctx, task, conn, concurrency); err != nil {
+				stepErrors = append(stepErrors, fmt.Sprintf("渠道排行: %v", err))
+				updateTaskStepStatus(ctx, task.ID, "channel_ranking_status", "failed", "channel_ranking_error", err.Error())
+			}
+		} else {
+			log.Printf("[dashboard] 跳过已完成步骤: 渠道排行")
+		}
+
+		if task.UserRankingStatus != "completed" {
+			if err := runUserRankingStep(ctx, task, conn, concurrency); err != nil {
+				stepErrors = append(stepErrors, fmt.Sprintf("用户排行: %v", err))
+				updateTaskStepStatus(ctx, task.ID, "user_ranking_status", "failed", "user_ranking_error", err.Error())
+			}
+		} else {
+			log.Printf("[dashboard] 跳过已完成步骤: 用户排行")
+		}
+	}
+
+	// 步骤5: 错误模型排行（独立于步骤1）
+	if task.ErrorModelRankingStatus != "completed" {
+		if err := runErrorModelRankingStep(ctx, task, conn, concurrency); err != nil {
+			stepErrors = append(stepErrors, fmt.Sprintf("错误模型排行: %v", err))
+			updateTaskStepStatus(ctx, task.ID, "error_model_ranking_status", "failed", "error_model_ranking_error", err.Error())
+		}
+	} else {
+		log.Printf("[dashboard] 跳过已完成步骤: 错误模型排行")
+	}
+
+	if len(stepErrors) > 0 {
+		return nil, fmt.Errorf("部分步骤失败: %s", strings.Join(stepErrors, "; "))
+	}
+
+	totalQuota := task.StatQuota
+	if totalQuota == 0 {
+		totalQuota = task.PaginatedQuota
+	}
+
 	return &models.SiteDailyStats{
 		UpstreamSiteID:    site.ID,
 		SiteName:          site.Name,
 		Date:              date,
 		TotalQuota:        totalQuota,
-		SuccessCount:      totalCount,
-		ErrorCount:        totalErrorCount,
-		TotalCount:        totalCount + totalErrorCount,
-		ModelRanking:      finalModelRanking,
-		ChannelRanking:    finalChannelRanking,
-		UserRanking:       finalUserRanking,
-		ErrorModelRanking: finalErrorModelRanking,
+		SuccessCount:      task.SuccessCount,
+		ErrorCount:        task.ErrorCount,
+		TotalCount:        task.SuccessCount + task.ErrorCount,
+		ModelRanking:      task.ModelRanking,
+		ChannelRanking:    task.ChannelRanking,
+		UserRanking:       task.UserRanking,
+		ErrorModelRanking: task.ErrorModelRanking,
 		ComputedAt:        time.Now(),
 	}, nil
+}
+
+func GetComputeStatusHandler(c *gin.Context) {
+	date := strings.TrimSpace(c.Query("date"))
+	if date == "" {
+		date = todayDateCST()
+	}
+	siteIDStr := strings.TrimSpace(c.Query("siteId"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	filter := bson.M{"date": date}
+	if siteIDStr != "" {
+		siteOID, err := primitive.ObjectIDFromHex(siteIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的站点 ID"})
+			return
+		}
+		filter["upstream_site_id"] = siteOID
+	}
+
+	cursor, err := DashboardComputeTaskCol.Find(ctx, filter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		return
+	}
+	defer cursor.Close(ctx)
+
+	var tasks []models.DashboardComputeTask
+	if err := cursor.All(ctx, &tasks); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "解析数据失败"})
+		return
+	}
+	if tasks == nil {
+		tasks = []models.DashboardComputeTask{}
+	}
+	c.JSON(http.StatusOK, tasks)
 }
 
 func buildQuotaRanking(m map[string]int64, limit int) []models.DashboardRankItem {
@@ -599,6 +895,7 @@ func ComputeDashboardStatsHandler(c *gin.Context) {
 		StartDate string `json:"startDate"`
 		EndDate   string `json:"endDate"`
 		SiteID    string `json:"siteId"`
+		Force     bool   `json:"force"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
@@ -691,7 +988,7 @@ func ComputeDashboardStatsHandler(c *gin.Context) {
 	for _, date := range dates {
 		for _, site := range sites {
 			log.Printf("[dashboard] computing stats for site=%s date=%s", site.Name, date)
-			stats, err := computeSiteStats(ctx, site, date, concurrency)
+			stats, err := computeSiteStats(ctx, site, date, concurrency, req.Force)
 			if err != nil {
 				errMsg := fmt.Sprintf("站点 %s 日期 %s: %v", site.Name, date, err)
 				computeErrors = append(computeErrors, errMsg)

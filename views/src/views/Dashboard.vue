@@ -26,6 +26,27 @@
 
     <el-alert v-if="errorMsg" type="error" :closable="true" :title="errorMsg" @close="errorMsg = ''" style="margin-bottom: 16px" />
 
+    <!-- Step progress display -->
+    <div v-if="computing || computeSteps.length > 0" class="step-progress-section" style="margin-bottom: 16px">
+      <div v-for="task in computeSteps" :key="task.siteName" class="step-progress-card">
+        <div class="step-progress-title">{{ task.siteName }}</div>
+        <div class="step-progress-list">
+          <div v-for="step in getStepList(task)" :key="step.key" class="step-item">
+            <span :class="['step-icon', step.status]">
+              {{ step.status === 'completed' ? '✅' : step.status === 'running' ? '⏳' : step.status === 'failed' ? '❌' : '⏸' }}
+            </span>
+            <span class="step-name">{{ step.label }}</span>
+            <span v-if="step.error" class="step-error">{{ step.error }}</span>
+          </div>
+        </div>
+      </div>
+      <div v-if="hasFailedSteps" style="margin-top: 8px">
+        <el-button type="warning" size="small" @click="retryFailed" :loading="computing">
+          重试失败步骤
+        </el-button>
+      </div>
+    </div>
+
     <el-alert
       v-if="computing"
       type="info"
@@ -259,6 +280,93 @@ const savingConfig = ref(false)
 const batchComputing = ref(false)
 const batchResult = ref(null)
 
+const computeSteps = ref([])
+let pollTimer = null
+
+const stepLabels = {
+  paginationStatus: '分页数据采集',
+  modelRankingStatus: '模型排行精排',
+  channelRankingStatus: '渠道排行精排',
+  userRankingStatus: '用户排行精排',
+  errorModelRankingStatus: '错误模型排行'
+}
+const stepErrorFields = {
+  paginationStatus: 'paginationError',
+  modelRankingStatus: 'modelRankingError',
+  channelRankingStatus: 'channelRankingError',
+  userRankingStatus: 'userRankingError',
+  errorModelRankingStatus: 'errorModelRankingError'
+}
+
+const getStepList = (task) => {
+  return Object.entries(stepLabels).map(([key, label]) => ({
+    key,
+    label,
+    status: task[key] || 'pending',
+    error: task[stepErrorFields[key]] || ''
+  }))
+}
+
+const hasFailedSteps = computed(() => {
+  return computeSteps.value.some(task =>
+    Object.keys(stepLabels).some(key => task[key] === 'failed')
+  )
+})
+
+const pollComputeStatus = async () => {
+  try {
+    const params = { date: selectedDate.value }
+    if (selectedComputeSiteId.value) {
+      params.siteId = selectedComputeSiteId.value
+    }
+    const res = await axios.get('/api/dashboard/compute-status', {
+      params,
+      headers: authHeaders()
+    })
+    computeSteps.value = res.data || []
+  } catch { /* ignore */ }
+}
+
+const startPolling = () => {
+  stopPolling()
+  pollComputeStatus()
+  pollTimer = setInterval(pollComputeStatus, 3000)
+}
+
+const stopPolling = () => {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+const retryFailed = async () => {
+  computing.value = true
+  errorMsg.value = ''
+  startPolling()
+  try {
+    const body = { date: selectedDate.value }
+    if (selectedComputeSiteId.value) {
+      body.siteId = selectedComputeSiteId.value
+    }
+    const res = await axios.post('/api/dashboard/compute',
+      body,
+      { headers: authHeaders(), timeout: 600000 }
+    )
+    ElMessage.success(`计算完成: ${res.data.computed} 条记录`)
+    if (res.data.errors?.length) {
+      ElMessage.warning(`${res.data.errors.length} 个错误`)
+    }
+    await pollComputeStatus()
+    await loadStats()
+  } catch (e) {
+    errorMsg.value = e.response?.data?.error || '重试失败'
+  } finally {
+    computing.value = false
+    stopPolling()
+  }
+}
+
 const notifyDialogVisible = ref(false)
 const notifyConfig = ref({
   enabled: false,
@@ -406,8 +514,10 @@ const loadStats = async () => {
 const computeToday = async () => {
   computing.value = true
   errorMsg.value = ''
+  computeSteps.value = []
+  startPolling()
   try {
-    const body = { date: selectedDate.value }
+    const body = { date: selectedDate.value, force: true }
     if (selectedComputeSiteId.value) {
       body.siteId = selectedComputeSiteId.value
     }
@@ -419,11 +529,13 @@ const computeToday = async () => {
     if (res.data.errors?.length) {
       ElMessage.warning(`${res.data.errors.length} 个错误`)
     }
+    await pollComputeStatus()
     await loadStats()
   } catch (e) {
     errorMsg.value = e.response?.data?.error || '计算失败'
   } finally {
     computing.value = false
+    stopPolling()
   }
 }
 
@@ -843,5 +955,52 @@ onMounted(async () => {
     flex-direction: column;
     align-items: flex-start;
   }
+}
+
+.step-progress-section {
+  background: #f5f7fa;
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+
+.step-progress-card {
+  margin-bottom: 8px;
+}
+
+.step-progress-title {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 6px;
+  color: #303133;
+}
+
+.step-progress-list {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.step-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.step-icon {
+  font-size: 14px;
+}
+
+.step-name {
+  color: #606266;
+}
+
+.step-error {
+  color: #f56c6c;
+  font-size: 12px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
