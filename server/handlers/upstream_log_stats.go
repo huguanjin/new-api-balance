@@ -42,18 +42,22 @@ type upstreamLogResponse struct {
 }
 
 type upstreamLogItem struct {
-	ID          int64  `json:"id"`
-	Type        int    `json:"type"`
-	CreatedAt   int64  `json:"created_at"`
-	Username    string `json:"username"`
-	TokenName   string `json:"token_name"`
-	ModelName   string `json:"model_name"`
-	Quota       int64  `json:"quota"`
-	Channel     int    `json:"channel"`
-	ChannelName string `json:"channel_name"`
-	Group       string `json:"group"`
-	Content     string `json:"content"`
-	UseTime     int    `json:"use_time"`
+	ID               int64  `json:"id"`
+	Type             int    `json:"type"`
+	CreatedAt        int64  `json:"created_at"`
+	Username         string `json:"username"`
+	TokenName        string `json:"token_name"`
+	ModelName        string `json:"model_name"`
+	Quota            int64  `json:"quota"`
+	Channel          int    `json:"channel"`
+	ChannelName      string `json:"channel_name"`
+	Group            string `json:"group"`
+	Content          string `json:"content"`
+	UseTime          int    `json:"use_time"`
+	PromptTokens     int    `json:"prompt_tokens"`
+	CompletionTokens int    `json:"completion_tokens"`
+	RequestID        string `json:"request_id"`
+	IsStream         bool   `json:"is_stream"`
 }
 
 type logGroupStats struct {
