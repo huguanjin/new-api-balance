@@ -16,7 +16,26 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-const exportPageSize = 100
+const (
+	exportPageSize    = 100
+	exportPageTimeout = 3 * time.Minute
+	exportMaxRetries  = 3
+)
+
+// exportHTTPClient is dedicated to upstream log export requests. It must not
+// reuse channelAvailabilityHTTPClient, whose 30s Timeout is tuned for quick
+// channel availability probes and would silently override the per-page
+// context timeout below (http.Client.Timeout wins whichever is shorter),
+// causing large exports to fail with 502s under load. DisableKeepAlives
+// mirrors logStatsHTTPClient - this upstream is known to be slow/flaky on
+// large log queries, and a fresh connection avoids reusing one the upstream
+// may have half-closed after a previous slow response.
+var exportHTTPClient = &http.Client{
+	Timeout: exportPageTimeout + 10*time.Second,
+	Transport: &http.Transport{
+		DisableKeepAlives: true,
+	},
+}
 
 func fetchExportPage(ctx context.Context, baseURL, token, userID string,
 	page, pageSize int, startTS, endTS int64, username string) ([]upstreamLogItem, int, error) {
@@ -27,7 +46,7 @@ func fetchExportPage(ctx context.Context, baseURL, token, userID string,
 		targetURL += "&username=" + url.QueryEscape(username)
 	}
 
-	reqCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	reqCtx, cancel := context.WithTimeout(ctx, exportPageTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, targetURL, nil)
@@ -42,7 +61,7 @@ func fetchExportPage(ctx context.Context, baseURL, token, userID string,
 		req.Header.Set("New-Api-User", userID)
 	}
 
-	resp, err := channelAvailabilityHTTPClient.Do(req)
+	resp, err := exportHTTPClient.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("http: %w", err)
 	}
@@ -67,6 +86,32 @@ func fetchExportPage(ctx context.Context, baseURL, token, userID string,
 		total = result.Data.Total
 	}
 	return result.Data.Items, total, nil
+}
+
+// fetchExportPageWithRetry retries transient failures (timeouts, connection
+// resets) a few times before giving up, since the upstream log endpoint is
+// known to be slow/flaky on large queries. It does not retry once ctx itself
+// is done (e.g. the overall export deadline was hit) - that's a real timeout,
+// not a transient blip.
+func fetchExportPageWithRetry(ctx context.Context, baseURL, token, userID string,
+	page, pageSize int, startTS, endTS int64, username string) ([]upstreamLogItem, int, error) {
+
+	var lastErr error
+	for attempt := 1; attempt <= exportMaxRetries; attempt++ {
+		items, total, err := fetchExportPage(ctx, baseURL, token, userID, page, pageSize, startTS, endTS, username)
+		if err == nil {
+			return items, total, nil
+		}
+		lastErr = err
+
+		if ctx.Err() != nil {
+			break
+		}
+		if attempt < exportMaxRetries {
+			log.Printf("[upstream-log-export] retrying page=%d attempt=%d after error: %v", page, attempt, err)
+		}
+	}
+	return nil, 0, lastErr
 }
 
 func ExportUpstreamLogsHandler(c *gin.Context) {
@@ -138,7 +183,7 @@ func ExportUpstreamLogsHandler(c *gin.Context) {
 
 	for cursorEndTS > startTS {
 		for page := 1; ; page++ {
-			items, _, err := fetchExportPage(ctx, baseURL, token, userID, page, exportPageSize, startTS, cursorEndTS, username)
+			items, _, err := fetchExportPageWithRetry(ctx, baseURL, token, userID, page, exportPageSize, startTS, cursorEndTS, username)
 			if err != nil {
 				log.Printf("[upstream-log-export] fetch error at cursorEnd=%d page=%d: %v", cursorEndTS, page, err)
 				c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("拉取数据失败: %v", err)})

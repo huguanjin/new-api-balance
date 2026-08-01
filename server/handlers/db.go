@@ -34,6 +34,7 @@ var (
 	DashboardConfigCol               *mongo.Collection
 	DashboardNotificationConfigCol   *mongo.Collection
 	DashboardComputeTaskCol          *mongo.Collection
+	KeyCustomerConfigCol             *mongo.Collection
 )
 
 type mongoConfigFile struct {
@@ -81,6 +82,7 @@ func InitDB() error {
 	DashboardConfigCol = db.Collection("dashboard_config")
 	DashboardNotificationConfigCol = db.Collection("dashboard_notification_config")
 	DashboardComputeTaskCol = db.Collection("dashboard_compute_tasks")
+	KeyCustomerConfigCol = db.Collection("key_customer_configs")
 
 	if err := ensureDashboardIndexes(ctx); err != nil {
 		return fmt.Errorf("dashboard index creation failed: %w", err)
@@ -109,6 +111,13 @@ func ensureDashboardIndexes(ctx context.Context) error {
 	}
 	_, err = DashboardComputeTaskCol.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "upstream_site_id", Value: 1}, {Key: "date", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = KeyCustomerConfigCol.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "upstream_site_id", Value: 1}},
 		Options: options.Index().SetUnique(true),
 	})
 	return err

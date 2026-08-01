@@ -80,6 +80,14 @@ type UpstreamSite struct {
 	UpdatedAt       time.Time          `bson:"updated_at" json:"updatedAt"`
 }
 
+type KeyCustomerConfig struct {
+	ID               primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	UpstreamSiteID   primitive.ObjectID `bson:"upstream_site_id" json:"upstreamSiteId"`
+	UserIDs          []int              `bson:"user_ids" json:"userIds"`
+	WarningThreshold float64            `bson:"warning_threshold" json:"warningThreshold"`
+	UpdatedAt        time.Time          `bson:"updated_at" json:"updatedAt"`
+}
+
 type ModelDetectionNotificationConfig struct {
 	ID                string                 `bson:"_id,omitempty" json:"-"`
 	Enabled           bool                   `bson:"enabled" json:"enabled"`

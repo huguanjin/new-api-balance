@@ -45,6 +45,10 @@
           <el-icon><DataAnalysis /></el-icon>
           <span>分组统计</span>
         </el-menu-item>
+        <el-menu-item index="/user-balance-stats">
+          <el-icon><Wallet /></el-icon>
+          <span>用户余额统计</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -107,6 +111,13 @@
           >
             统计
           </el-button>
+          <el-button
+            :type="route.path === '/user-balance-stats' ? 'primary' : 'default'"
+            :icon="Wallet"
+            @click="router.push('/user-balance-stats')"
+          >
+            用户余额
+          </el-button>
         </div>
         <div class="header-title">
           <h1>{{ pageTitle }}</h1>
@@ -146,7 +157,7 @@
 <script setup>
 import { computed, ref, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Coin, Monitor, Connection, OfficeBuilding, Cpu, SwitchButton, Lock, Document, DataAnalysis, Odometer } from '@element-plus/icons-vue'
+import { Coin, Monitor, Connection, OfficeBuilding, Cpu, SwitchButton, Lock, Document, DataAnalysis, Odometer, Wallet } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 
@@ -161,6 +172,7 @@ const pageMeta = {
   '/codex-balance': { title: 'Codex 号池余额', description: '查询 Codex 号池各账号配额使用情况' },
   '/upstream-logs': { title: '上游站点日志', description: '查询各上游站点的请求日志' },
   '/upstream-stats': { title: '分组成功率统计', description: '按分组聚合上游日志，查看各分组和模型的成功率' },
+  '/user-balance-stats': { title: '用户余额统计', description: '拉取各上游站点用户信息，统计用户余额分布' },
 }
 
 const pageTitle = computed(() => pageMeta[route.path]?.title || '余额管理')

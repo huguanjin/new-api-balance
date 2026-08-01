@@ -8,6 +8,7 @@ import UpstreamSites from '../views/UpstreamSites.vue'
 import CodexBalance from '../views/CodexBalance.vue'
 import UpstreamLogs from '../views/UpstreamLogs.vue'
 import UpstreamStats from '../views/UpstreamStats.vue'
+import UserBalanceStats from '../views/UserBalanceStats.vue'
 import Dashboard from '../views/Dashboard.vue'
 
 const routes = [
@@ -64,6 +65,11 @@ const routes = [
         path: 'upstream-stats',
         name: 'UpstreamStats',
         component: UpstreamStats
+      },
+      {
+        path: 'user-balance-stats',
+        name: 'UserBalanceStats',
+        component: UserBalanceStats
       }
     ]
   }
