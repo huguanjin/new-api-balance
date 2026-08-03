@@ -13,8 +13,8 @@
     </div>
 
     <div class="filter-bar">
-      <el-input v-model="queryForm.username" placeholder="用户名" clearable style="width: 160px" @keyup.enter="queryBill" />
-      <el-input v-model="queryForm.userId" placeholder="用户ID" clearable style="width: 140px" @keyup.enter="queryBill" />
+      <el-input v-model="queryForm.username" placeholder="用户名" clearable style="width: 160px" @keyup.enter="submitExport" />
+      <el-input v-model="queryForm.userId" placeholder="用户ID" clearable style="width: 140px" @keyup.enter="submitExport" />
       <el-date-picker
         v-model="queryForm.timeRange"
         type="datetimerange"
