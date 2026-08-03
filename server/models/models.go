@@ -81,6 +81,22 @@ type UpstreamSite struct {
 	UpdatedAt       time.Time          `bson:"updated_at" json:"updatedAt"`
 }
 
+type BillExportJob struct {
+	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	UpstreamSiteID primitive.ObjectID `bson:"upstream_site_id" json:"upstreamSiteId"`
+	Username       string             `bson:"username,omitempty" json:"username,omitempty"`
+	UserID         int64              `bson:"user_id,omitempty" json:"userId,omitempty"`
+	StartTS        int64              `bson:"start_ts" json:"startTs"`
+	EndTS          int64              `bson:"end_ts" json:"endTs"`
+	Status         string             `bson:"status" json:"status"`
+	Error          string             `bson:"error,omitempty" json:"error,omitempty"`
+	FilePath       string             `bson:"file_path,omitempty" json:"-"`
+	FileName       string             `bson:"file_name,omitempty" json:"fileName,omitempty"`
+	RowCount       int                `bson:"row_count" json:"rowCount"`
+	CreatedAt      time.Time          `bson:"created_at" json:"createdAt"`
+	UpdatedAt      time.Time          `bson:"updated_at" json:"updatedAt"`
+}
+
 type KeyCustomerConfig struct {
 	ID               primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	UpstreamSiteID   primitive.ObjectID `bson:"upstream_site_id" json:"upstreamSiteId"`

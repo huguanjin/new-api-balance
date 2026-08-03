@@ -35,6 +35,7 @@ var (
 	DashboardNotificationConfigCol   *mongo.Collection
 	DashboardComputeTaskCol          *mongo.Collection
 	KeyCustomerConfigCol             *mongo.Collection
+	BillExportJobCol                 *mongo.Collection
 )
 
 type mongoConfigFile struct {
@@ -83,6 +84,7 @@ func InitDB() error {
 	DashboardNotificationConfigCol = db.Collection("dashboard_notification_config")
 	DashboardComputeTaskCol = db.Collection("dashboard_compute_tasks")
 	KeyCustomerConfigCol = db.Collection("key_customer_configs")
+	BillExportJobCol = db.Collection("bill_export_jobs")
 
 	if err := ensureDashboardIndexes(ctx); err != nil {
 		return fmt.Errorf("dashboard index creation failed: %w", err)

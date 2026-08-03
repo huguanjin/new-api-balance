@@ -21,6 +21,7 @@ func main() {
 	handlers.StartModelDetectionScheduler()
 	handlers.StartChannelAvailabilityScheduler()
 	handlers.StartDashboardNotificationScheduler()
+	handlers.StartBillExportCleanupScheduler()
 
 	r := gin.Default()
 	r.GET("/healthz", func(c *gin.Context) {
@@ -79,7 +80,10 @@ func main() {
 			protected.POST("/codex/query", handlers.QueryCodexBalanceHandler)
 			protected.GET("/upstream-logs", handlers.QueryUpstreamLogsHandler)
 			protected.GET("/upstream-log-export", handlers.ExportUpstreamLogsHandler)
-			protected.GET("/customer-bill-export", handlers.ExportCustomerBillHandler)
+			protected.POST("/customer-bill-export", handlers.CreateCustomerBillExportJobHandler)
+			protected.GET("/customer-bill-export", handlers.ListCustomerBillExportJobsHandler)
+			protected.GET("/customer-bill-export/:id", handlers.GetCustomerBillExportJobHandler)
+			protected.GET("/customer-bill-export/:id/download", handlers.DownloadCustomerBillExportJobHandler)
 			protected.GET("/upstream-log-stats", handlers.QueryUpstreamLogStatsHandler)
 			protected.GET("/upstream-groups", handlers.QueryUpstreamGroupsHandler)
 			protected.GET("/upstream-user-balance", handlers.QueryUserBalanceStatsHandler)

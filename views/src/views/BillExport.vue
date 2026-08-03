@@ -3,14 +3,11 @@
     <div class="header">
       <h2>客户账单导出</h2>
       <div class="actions">
-        <el-select v-model="queryForm.siteId" placeholder="请选择上游站点" style="width: 220px">
+        <el-select v-model="queryForm.siteId" placeholder="请选择上游站点" style="width: 220px" @change="onSiteChange">
           <el-option v-for="site in siteList" :key="site.id" :label="site.name" :value="site.id" />
         </el-select>
-        <el-button type="primary" @click="queryBill" :loading="loading" :disabled="!queryForm.siteId">
-          查询
-        </el-button>
-        <el-button type="success" @click="exportCsv" :loading="exporting" :disabled="!items.length">
-          导出CSV
+        <el-button type="primary" @click="submitExport" :loading="submitting" :disabled="!queryForm.siteId">
+          生成账单
         </el-button>
       </div>
     </div>
@@ -32,42 +29,52 @@
 
     <el-alert v-if="errorMsg" type="error" :closable="true" :title="errorMsg" @close="errorMsg = ''" style="margin-bottom: 12px" />
 
-    <div class="summary-bar" v-if="items.length">
-      <span>共 {{ items.length }} 条记录</span>
-      <span>总费用：${{ totalCost.toFixed(4) }}</span>
+    <div class="hint-bar">
+      <el-icon><InfoFilled /></el-icon>
+      <span>账单在后台生成，生成完成后可点击"下载"获取 CSV 文件，文件保留 24 小时后自动清理</span>
     </div>
 
-    <el-table :data="items" v-loading="loading" stripe border size="small" style="width: 100%">
-      <el-table-column prop="id" label="记录ID" width="110" />
-      <el-table-column prop="user_id" label="用户ID" width="90" />
-      <el-table-column prop="username" label="用户名" width="120" show-overflow-tooltip />
+    <el-table :data="jobs" stripe border size="small" style="width: 100%">
+      <el-table-column label="用户" width="140">
+        <template #default="{ row }">
+          {{ row.username || row.userId }}
+        </template>
+      </el-table-column>
+      <el-table-column label="时间范围" min-width="220">
+        <template #default="{ row }">
+          {{ formatTime(row.startTs) }} 至 {{ formatTime(row.endTs) }}
+        </template>
+      </el-table-column>
+      <el-table-column label="状态" width="110">
+        <template #default="{ row }">
+          <el-tag size="small" :type="statusTag(row.status)">{{ statusLabel(row.status) }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="记录数" width="90">
+        <template #default="{ row }">
+          {{ row.status === 'completed' ? row.rowCount : '-' }}
+        </template>
+      </el-table-column>
       <el-table-column label="创建时间" width="170">
         <template #default="{ row }">
-          {{ formatTime(row.created_at) }}
+          {{ formatDateTime(row.createdAt) }}
         </template>
       </el-table-column>
-      <el-table-column prop="model_name" label="模型名称" min-width="160" show-overflow-tooltip />
-      <el-table-column prop="group" label="分组" width="130" show-overflow-tooltip />
-      <el-table-column prop="prompt_tokens" label="输入" width="90" />
-      <el-table-column prop="completion_tokens" label="输出" width="90" />
-      <el-table-column label="费用(USD)" width="100">
+      <el-table-column label="操作" width="120" fixed="right">
         <template #default="{ row }">
-          {{ formatQuota(row.quota) }}
+          <el-button v-if="row.status === 'completed'" type="primary" link @click="downloadJob(row)">下载</el-button>
+          <span v-else-if="row.status === 'failed'" class="text-error" :title="row.error">失败</span>
+          <span v-else class="text-muted">-</span>
         </template>
       </el-table-column>
-      <el-table-column prop="is_stream" label="流式" width="60">
-        <template #default="{ row }">
-          {{ row.is_stream ? '是' : '否' }}
-        </template>
-      </el-table-column>
-      <el-table-column prop="request_id" label="请求ID" min-width="200" show-overflow-tooltip />
     </el-table>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { InfoFilled } from '@element-plus/icons-vue'
 import axios from 'axios'
 
 const authHeaders = () => ({
@@ -75,10 +82,10 @@ const authHeaders = () => ({
 })
 
 const siteList = ref([])
-const loading = ref(false)
-const exporting = ref(false)
+const submitting = ref(false)
 const errorMsg = ref('')
-const items = ref([])
+const jobs = ref([])
+const pollTimers = new Map()
 
 const monthStart = (offset = 0) => {
   const d = new Date()
@@ -108,8 +115,6 @@ const timeShortcuts = [
   { text: '最近30天', value: () => [new Date(Date.now() - 30 * 24 * 3600 * 1000), new Date()] },
 ]
 
-const totalCost = computed(() => items.value.reduce((sum, row) => sum + (row.quota || 0) / 500000, 0))
-
 const loadSites = async () => {
   try {
     const res = await axios.get('/api/upstream-sites', { headers: authHeaders() })
@@ -117,12 +122,38 @@ const loadSites = async () => {
     if (siteList.value.length && !queryForm.siteId) {
       queryForm.siteId = siteList.value[0].id
     }
+    if (queryForm.siteId) {
+      await loadJobs()
+    }
   } catch {
     // ignore
   }
 }
 
-const queryBill = async () => {
+const loadJobs = async () => {
+  if (!queryForm.siteId) return
+  try {
+    const res = await axios.get('/api/customer-bill-export', {
+      params: { upstreamSiteId: queryForm.siteId },
+      headers: authHeaders()
+    })
+    jobs.value = res.data || []
+    for (const job of jobs.value) {
+      if (job.status === 'pending' || job.status === 'running') {
+        pollJob(job.id)
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+const onSiteChange = () => {
+  jobs.value = []
+  loadJobs()
+}
+
+const submitExport = async () => {
   if (!queryForm.siteId) {
     ElMessage.warning('请选择上游站点')
     return
@@ -136,32 +167,63 @@ const queryBill = async () => {
     return
   }
 
-  loading.value = true
+  submitting.value = true
   errorMsg.value = ''
   try {
-    const params = {
+    const payload = {
       upstreamSiteId: queryForm.siteId,
-      start_timestamp: queryForm.timeRange[0],
-      end_timestamp: queryForm.timeRange[1]
+      startTs: Number(queryForm.timeRange[0]),
+      endTs: Number(queryForm.timeRange[1])
     }
-    if (queryForm.username) params.username = queryForm.username
-    if (queryForm.userId) params.user_id = queryForm.userId
+    if (queryForm.username) payload.username = queryForm.username
+    if (queryForm.userId) payload.userId = queryForm.userId
 
-    const res = await axios.get('/api/customer-bill-export', {
-      params,
-      headers: authHeaders(),
-      timeout: 120000
-    })
-    items.value = res.data.items || []
-    if (!items.value.length) {
-      ElMessage.warning('没有符合条件的记录')
-    }
+    const res = await axios.post('/api/customer-bill-export', payload, { headers: authHeaders() })
+    jobs.value.unshift(res.data)
+    pollJob(res.data.id)
+    ElMessage.success('账单生成任务已提交')
   } catch (e) {
-    errorMsg.value = e.response?.data?.error || e.message || '查询失败'
-    items.value = []
+    errorMsg.value = e.response?.data?.error || e.message || '提交失败'
   } finally {
-    loading.value = false
+    submitting.value = false
   }
+}
+
+const pollJob = (jobId) => {
+  if (pollTimers.has(jobId)) return
+  const timer = setInterval(async () => {
+    try {
+      const res = await axios.get(`/api/customer-bill-export/${jobId}`, { headers: authHeaders() })
+      const idx = jobs.value.findIndex(j => j.id === jobId)
+      if (idx !== -1) jobs.value[idx] = res.data
+      if (res.data.status === 'completed' || res.data.status === 'failed') {
+        clearInterval(timer)
+        pollTimers.delete(jobId)
+      }
+    } catch {
+      clearInterval(timer)
+      pollTimers.delete(jobId)
+    }
+  }, 3000)
+  pollTimers.set(jobId, timer)
+}
+
+const downloadJob = (row) => {
+  const url = `/api/customer-bill-export/${row.id}/download`
+  axios.get(url, { headers: authHeaders(), responseType: 'blob' })
+    .then((res) => {
+      const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8;' })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = row.fileName || `账单-${row.username || row.userId}.csv`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(link.href)
+    })
+    .catch((e) => {
+      ElMessage.error(e.response?.data?.error || e.message || '下载失败')
+    })
 }
 
 const formatTime = (ts) => {
@@ -171,65 +233,30 @@ const formatTime = (ts) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-const formatQuota = (quota) => {
-  if (quota == null) return '-'
-  const val = quota / 500000
-  if (val >= 1) return '$' + val.toFixed(2)
-  return '$' + val.toFixed(4)
+const formatDateTime = (isoStr) => {
+  if (!isoStr) return '-'
+  const d = new Date(isoStr)
+  return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-const csvCell = (value) => {
-  const text = String(value ?? '')
-  return `"${text.replace(/"/g, '""')}"`
+const statusLabel = (status) => {
+  const map = { pending: '等待中', running: '生成中', completed: '已完成', failed: '失败' }
+  return map[status] || status
 }
 
-const exportTimestamp = () => {
-  const date = new Date()
-  const pad = (v) => String(v).padStart(2, '0')
-  return [date.getFullYear(), pad(date.getMonth() + 1), pad(date.getDate())].join('') +
-    '-' + [pad(date.getHours()), pad(date.getMinutes()), pad(date.getSeconds())].join('')
+const statusTag = (status) => {
+  const map = { pending: 'info', running: 'warning', completed: 'success', failed: 'danger' }
+  return map[status] || 'info'
 }
 
-const exportCsv = () => {
-  if (!items.value.length) return
-  exporting.value = true
-  try {
-    const rows = [
-      ['记录ID', '用户ID', '用户名', '创建时间', '模型名称', '分组', '输入', '输出', '费用(USD)', '流式', '请求ID'],
-      ...items.value.map(row => [
-        row.id,
-        row.user_id,
-        row.username || '',
-        formatTime(row.created_at),
-        row.model_name || '',
-        row.group || '',
-        row.prompt_tokens || '',
-        row.completion_tokens || '',
-        row.quota != null ? (row.quota / 500000).toFixed(4) : '',
-        row.is_stream ? '是' : '否',
-        row.request_id || ''
-      ])
-    ]
+onMounted(() => {
+  loadSites()
+})
 
-    const csv = `﻿${rows.map(r => r.map(csvCell).join(',')).join('\r\n')}`
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    const nameHint = queryForm.username || queryForm.userId
-    link.download = `账单-${nameHint}-${exportTimestamp()}.csv`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
-
-    ElMessage.success(`导出完成，共 ${items.value.length} 条记录`)
-  } finally {
-    exporting.value = false
-  }
-}
-
-onMounted(loadSites)
+onUnmounted(() => {
+  for (const timer of pollTimers.values()) clearInterval(timer)
+  pollTimers.clear()
+})
 </script>
 
 <style scoped>
@@ -263,12 +290,22 @@ onMounted(loadSites)
   align-items: center;
 }
 
-.summary-bar {
+.hint-bar {
   display: flex;
-  gap: 24px;
+  align-items: center;
+  gap: 6px;
   margin-bottom: 12px;
   font-size: 13px;
-  color: #606266;
+  color: #909399;
+}
+
+.text-muted {
+  color: #9ca3af;
+}
+
+.text-error {
+  color: #f56c6c;
+  cursor: help;
 }
 
 @media (max-width: 768px) {
