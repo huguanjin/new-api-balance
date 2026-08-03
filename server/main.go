@@ -79,6 +79,7 @@ func main() {
 			protected.POST("/codex/query", handlers.QueryCodexBalanceHandler)
 			protected.GET("/upstream-logs", handlers.QueryUpstreamLogsHandler)
 			protected.GET("/upstream-log-export", handlers.ExportUpstreamLogsHandler)
+			protected.GET("/customer-bill-export", handlers.ExportCustomerBillHandler)
 			protected.GET("/upstream-log-stats", handlers.QueryUpstreamLogStatsHandler)
 			protected.GET("/upstream-groups", handlers.QueryUpstreamGroupsHandler)
 			protected.GET("/upstream-user-balance", handlers.QueryUserBalanceStatsHandler)

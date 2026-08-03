@@ -76,6 +76,7 @@ type UpstreamSite struct {
 	Token           string             `bson:"token" json:"token"`
 	UserID          string             `bson:"userId" json:"userId"`
 	SkipStatusCodes []int              `bson:"skip_status_codes,omitempty" json:"skipStatusCodes,omitempty"`
+	SqlDsn          string             `bson:"sql_dsn,omitempty" json:"sqlDsn,omitempty"`
 	CreatedAt       time.Time          `bson:"created_at" json:"createdAt"`
 	UpdatedAt       time.Time          `bson:"updated_at" json:"updatedAt"`
 }

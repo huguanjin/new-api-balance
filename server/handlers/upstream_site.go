@@ -46,6 +46,7 @@ func CreateUpstreamSiteHandler(c *gin.Context) {
 		Token           string `json:"token"`
 		UserID          string `json:"userId"`
 		SkipStatusCodes []int  `json:"skipStatusCodes"`
+		SqlDsn          string `json:"sqlDsn"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
@@ -67,6 +68,7 @@ func CreateUpstreamSiteHandler(c *gin.Context) {
 		Token:           strings.TrimSpace(req.Token),
 		UserID:          strings.TrimSpace(req.UserID),
 		SkipStatusCodes: req.SkipStatusCodes,
+		SqlDsn:          strings.TrimSpace(req.SqlDsn),
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
@@ -97,6 +99,7 @@ func UpdateUpstreamSiteHandler(c *gin.Context) {
 		Token           string `json:"token"`
 		UserID          string `json:"userId"`
 		SkipStatusCodes []int  `json:"skipStatusCodes"`
+		SqlDsn          string `json:"sqlDsn"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
@@ -114,6 +117,7 @@ func UpdateUpstreamSiteHandler(c *gin.Context) {
 		"token":             strings.TrimSpace(req.Token),
 		"userId":            strings.TrimSpace(req.UserID),
 		"skip_status_codes": req.SkipStatusCodes,
+		"sql_dsn":           strings.TrimSpace(req.SqlDsn),
 		"updated_at":        now,
 	}
 

@@ -10,6 +10,7 @@ import UpstreamLogs from '../views/UpstreamLogs.vue'
 import UpstreamStats from '../views/UpstreamStats.vue'
 import UserBalanceStats from '../views/UserBalanceStats.vue'
 import Dashboard from '../views/Dashboard.vue'
+import BillExport from '../views/BillExport.vue'
 
 const routes = [
   {
@@ -70,6 +71,11 @@ const routes = [
         path: 'user-balance-stats',
         name: 'UserBalanceStats',
         component: UserBalanceStats
+      },
+      {
+        path: 'bill-export',
+        name: 'BillExport',
+        component: BillExport
       }
     ]
   }

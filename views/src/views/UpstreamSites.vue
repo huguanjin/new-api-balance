@@ -14,6 +14,12 @@
         </template>
       </el-table-column>
       <el-table-column prop="userId" label="UserID" width="100" />
+      <el-table-column label="MySQL DSN" min-width="140">
+        <template #default="{ row }">
+          <span v-if="row.sqlDsn">{{ maskToken(row.sqlDsn) }}</span>
+          <span v-else class="text-muted">未配置</span>
+        </template>
+      </el-table-column>
       <el-table-column label="状态码过滤" width="140">
         <template #default="{ row }">
           <span v-if="row.skipStatusCodes && row.skipStatusCodes.length">{{ row.skipStatusCodes.join(', ') }}</span>
@@ -52,6 +58,10 @@
           </el-select>
           <div class="form-hint">测试渠道时，包含这些状态码的错误将被视为通过</div>
         </el-form-item>
+        <el-form-item label="MySQL DSN">
+          <el-input v-model="form.sqlDsn" placeholder="user:password@tcp(host:3306)/dbname" show-password type="password" />
+          <div class="form-hint">用于客户账单导出，直连该站点的 MySQL 数据库查询 logs 表</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -80,7 +90,8 @@ const form = reactive({
   url: '',
   token: '',
   userId: '',
-  skipStatusCodes: []
+  skipStatusCodes: [],
+  sqlDsn: ''
 })
 
 const formRules = {
@@ -109,6 +120,7 @@ const resetForm = () => {
   form.token = ''
   form.userId = ''
   form.skipStatusCodes = []
+  form.sqlDsn = ''
   editId.value = ''
   isEdit.value = false
 }
@@ -126,6 +138,7 @@ const openEditDialog = (row) => {
   form.token = row.token
   form.userId = row.userId || ''
   form.skipStatusCodes = (row.skipStatusCodes || []).map(String)
+  form.sqlDsn = row.sqlDsn || ''
   dialogVisible.value = true
 }
 
@@ -140,7 +153,8 @@ const handleSave = async () => {
         url: form.url,
         token: form.token,
         userId: form.userId,
-        skipStatusCodes: form.skipStatusCodes.map(Number).filter(n => !isNaN(n) && n > 0)
+        skipStatusCodes: form.skipStatusCodes.map(Number).filter(n => !isNaN(n) && n > 0),
+        sqlDsn: form.sqlDsn
       }
       if (isEdit.value) {
         await axios.put(`/api/upstream-sites/${editId.value}`, payload, authHeaders())
