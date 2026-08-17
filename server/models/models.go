@@ -97,6 +97,20 @@ type BillExportJob struct {
 	UpdatedAt      time.Time          `bson:"updated_at" json:"updatedAt"`
 }
 
+type CustomSqlExportJob struct {
+	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	UpstreamSiteID primitive.ObjectID `bson:"upstream_site_id" json:"upstreamSiteId"`
+	SQL            string             `bson:"sql" json:"sql"`
+	Status         string             `bson:"status" json:"status"`
+	Error          string             `bson:"error,omitempty" json:"error,omitempty"`
+	FilePath       string             `bson:"file_path,omitempty" json:"-"`
+	FileName       string             `bson:"file_name,omitempty" json:"fileName,omitempty"`
+	RowCount       int                `bson:"row_count" json:"rowCount"`
+	Truncated      bool               `bson:"truncated,omitempty" json:"truncated,omitempty"`
+	CreatedAt      time.Time          `bson:"created_at" json:"createdAt"`
+	UpdatedAt      time.Time          `bson:"updated_at" json:"updatedAt"`
+}
+
 type KeyCustomerConfig struct {
 	ID               primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	UpstreamSiteID   primitive.ObjectID `bson:"upstream_site_id" json:"upstreamSiteId"`

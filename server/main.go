@@ -22,6 +22,7 @@ func main() {
 	handlers.StartChannelAvailabilityScheduler()
 	handlers.StartDashboardNotificationScheduler()
 	handlers.StartBillExportCleanupScheduler()
+	handlers.StartCustomSqlExportCleanupScheduler()
 
 	r := gin.Default()
 	r.GET("/healthz", func(c *gin.Context) {
@@ -84,6 +85,10 @@ func main() {
 			protected.GET("/customer-bill-export", handlers.ListCustomerBillExportJobsHandler)
 			protected.GET("/customer-bill-export/:id", handlers.GetCustomerBillExportJobHandler)
 			protected.GET("/customer-bill-export/:id/download", handlers.DownloadCustomerBillExportJobHandler)
+				protected.POST("/custom-sql-export", handlers.CreateCustomSqlExportJobHandler)
+				protected.GET("/custom-sql-export", handlers.ListCustomSqlExportJobsHandler)
+				protected.GET("/custom-sql-export/:id", handlers.GetCustomSqlExportJobHandler)
+				protected.GET("/custom-sql-export/:id/download", handlers.DownloadCustomSqlExportJobHandler)
 			protected.GET("/upstream-log-stats", handlers.QueryUpstreamLogStatsHandler)
 			protected.GET("/upstream-groups", handlers.QueryUpstreamGroupsHandler)
 			protected.GET("/upstream-user-balance", handlers.QueryUserBalanceStatsHandler)

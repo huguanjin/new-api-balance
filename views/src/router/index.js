@@ -11,6 +11,7 @@ import UpstreamStats from '../views/UpstreamStats.vue'
 import UserBalanceStats from '../views/UserBalanceStats.vue'
 import Dashboard from '../views/Dashboard.vue'
 import BillExport from '../views/BillExport.vue'
+import CustomSqlExport from '../views/CustomSqlExport.vue'
 
 const routes = [
   {
@@ -76,6 +77,11 @@ const routes = [
         path: 'bill-export',
         name: 'BillExport',
         component: BillExport
+      },
+      {
+        path: 'custom-sql-export',
+        name: 'CustomSqlExport',
+        component: CustomSqlExport
       }
     ]
   }
