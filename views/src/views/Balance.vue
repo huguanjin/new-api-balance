@@ -4,6 +4,7 @@
       <h2>渠道余额</h2>
       <div class="actions">
         <el-button type="primary" @click="refreshAll" :loading="refreshing">刷新所有余额</el-button>
+        <el-button type="warning" plain :icon="Star" @click="queryKeyChannelsBalance" :loading="queryingKeyBalance">查询重点渠道余额</el-button>
         <el-button type="info" @click="openImportDialog">导入渠道</el-button>
         <el-button @click="exportChannels">导出渠道</el-button>
         <el-button type="warning" @click="sendBalanceNotification" :loading="notifying">立即推送</el-button>
@@ -27,6 +28,7 @@
         <el-option label="禁用" value="2" />
         <el-option label="未知" value="0" />
       </el-select>
+      <el-checkbox v-model="keyOnlyFilter">只看重点渠道</el-checkbox>
       <span class="filter-summary">显示 {{ filteredSites.length }} / {{ sites.length }} 个渠道</span>
     </div>
 
@@ -35,6 +37,19 @@
       <el-table-column label="状态" width="100">
         <template #default="{ row }">
           <el-tag :type="channelStatusType(row.status)">{{ channelStatusLabel(row.status) }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="重点" width="70" align="center">
+        <template #default="{ row }">
+          <el-tooltip :content="row.isKey ? '取消重点标记' : '标记为重点渠道'" placement="top">
+            <el-icon
+              class="key-star"
+              :class="{ 'key-star--active': row.isKey }"
+              @click="toggleKeySite(row)"
+            >
+              <component :is="row.isKey ? StarFilled : Star" />
+            </el-icon>
+          </el-tooltip>
         </template>
       </el-table-column>
       <el-table-column prop="name" label="站点名称" />
@@ -258,7 +273,7 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, Star, StarFilled } from '@element-plus/icons-vue'
 import axios from 'axios'
 
 const sites = ref([])
@@ -269,13 +284,15 @@ const notifying = ref(false)
 const importing = ref(false)
 const importConfigLoading = ref(false)
 const statusFilter = ref('all')
+const keyOnlyFilter = ref(false)
+const queryingKeyBalance = ref(false)
 const defaultRedBalanceThreshold = 100
 const defaultYellowBalanceThreshold = 500
 
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const editIndex = ref(-1)
-const currentSite = ref({ channelId: 0, status: 0, name: '', url: '', adapter: '', token: '', userId: '', adminAccount: '', adminPassword: '', remark: '' })
+const currentSite = ref({ channelId: 0, status: 0, name: '', url: '', adapter: '', token: '', userId: '', adminAccount: '', adminPassword: '', remark: '', isKey: false })
 
 const importDialogVisible = ref(false)
 const importSiteId = ref('')
@@ -337,9 +354,15 @@ const notificationStatusTitle = computed(() => {
 })
 
 const filteredSites = computed(() => {
-  if (statusFilter.value === 'all') return sites.value
-  const status = Number(statusFilter.value)
-  return sites.value.filter(site => Number(site.status || 0) === status)
+  let result = sites.value
+  if (statusFilter.value !== 'all') {
+    const status = Number(statusFilter.value)
+    result = result.filter(site => Number(site.status || 0) === status)
+  }
+  if (keyOnlyFilter.value) {
+    result = result.filter(site => site.isKey)
+  }
+  return result
 })
 
 const fetchSites = async () => {
@@ -387,7 +410,8 @@ const syncToServer = async () => {
       userId: s.userId,
       adminAccount: s.adminAccount || '',
       adminPassword: s.adminPassword || '',
-      remark: s.remark || ''
+      remark: s.remark || '',
+      isKey: !!s.isKey
     }))
     await axios.post('/api/sites', listToSave, {
       headers: authHeaders()
@@ -461,11 +485,12 @@ const exportChannels = () => {
   }
 
   const rows = [
-    ['渠道ID', '状态码', '状态', '渠道名称', '渠道URL', '适配', 'Token', 'User ID', '余额USD'],
+    ['渠道ID', '状态码', '状态', '重点渠道', '渠道名称', '渠道URL', '适配', 'Token', 'User ID', '余额USD'],
     ...sites.value.map(site => [
       site.channelId || '',
       site.status || 0,
       channelStatusLabel(site.status),
+      site.isKey ? '是' : '否',
       site.name || '',
       site.url || '',
       siteAdapterLabel(site.adapter),
@@ -513,6 +538,27 @@ const refreshAll = async () => {
   })
   await Promise.all(promises)
   refreshing.value = false
+}
+
+const toggleKeySite = (site) => {
+  site.isKey = !site.isKey
+  syncToServer()
+}
+
+const queryKeyChannelsBalance = async () => {
+  const keySites = sites.value.filter(site => site.isKey)
+  if (!keySites.length) {
+    ElMessage.warning('暂无标记的重点渠道')
+    return
+  }
+  keyOnlyFilter.value = true
+  queryingKeyBalance.value = true
+  try {
+    await Promise.all(keySites.map(site => fetchSiteBalance(site)))
+    ElMessage.success(`已刷新 ${keySites.length} 个重点渠道余额`)
+  } finally {
+    queryingKeyBalance.value = false
+  }
 }
 
 const refreshSite = async (site) => {
@@ -757,7 +803,7 @@ const formatDateTime = (value) => {
 
 const openAddSite = () => {
   isEdit.value = false
-  currentSite.value = { channelId: 0, status: 0, name: '', url: '', adapter: '', token: '', userId: '' }
+  currentSite.value = { channelId: 0, status: 0, name: '', url: '', adapter: '', token: '', userId: '', isKey: false }
   dialogVisible.value = true
 }
 
@@ -837,6 +883,20 @@ onMounted(() => {
 .filter-summary {
   color: #606266;
   font-size: 14px;
+}
+
+.key-star {
+  cursor: pointer;
+  font-size: 18px;
+  color: #c0c4cc;
+}
+
+.key-star:hover {
+  color: #e6a23c;
+}
+
+.key-star--active {
+  color: #f7ba2a;
 }
 
 .import-alert {

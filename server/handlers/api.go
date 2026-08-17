@@ -576,6 +576,9 @@ func applySiteSettings(site *models.Site, existing models.Site) {
 	if strings.TrimSpace(site.Remark) == "" {
 		site.Remark = existing.Remark
 	}
+	if existing.IsKey {
+		site.IsKey = true
+	}
 	if isEmptyModelDetectionConfig(site.ModelDetection) && !isEmptyModelDetectionConfig(existing.ModelDetection) {
 		site.ModelDetection = existing.ModelDetection
 	}

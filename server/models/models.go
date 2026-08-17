@@ -24,6 +24,7 @@ type Site struct {
 	AdminAccount   string               `bson:"admin_account,omitempty" json:"adminAccount,omitempty"`
 	AdminPassword  string               `bson:"admin_password,omitempty" json:"adminPassword,omitempty"`
 	Remark         string               `bson:"remark,omitempty" json:"remark,omitempty"`
+	IsKey          bool                 `bson:"is_key,omitempty" json:"isKey,omitempty"`
 	ModelDetection ModelDetectionConfig `bson:"model_detection,omitempty" json:"modelDetection,omitempty"`
 }
 
