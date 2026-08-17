@@ -26,7 +26,7 @@
 
     <div class="hint-bar">
       <el-icon><InfoFilled /></el-icon>
-      <span>仅支持只读 SELECT 查询，结果最多导出 {{ maxRows.toLocaleString() }} 行；查询在后台执行，完成后可下载 CSV 或压缩后下载，文件保留 24 小时后自动清理</span>
+      <span>仅支持只读 SELECT 查询，结果不限行数；查询在后台执行，完成后可下载 CSV 或压缩后下载，文件保留 24 小时后自动清理</span>
     </div>
 
     <el-table :data="jobs" stripe border size="small" style="width: 100%">
@@ -42,10 +42,7 @@
       </el-table-column>
       <el-table-column label="记录数" width="120">
         <template #default="{ row }">
-          <template v-if="row.status === 'completed'">
-            {{ row.rowCount }}<span v-if="row.truncated" class="text-warning">（已截断）</span>
-          </template>
-          <template v-else>-</template>
+          {{ row.status === 'completed' ? row.rowCount : '-' }}
         </template>
       </el-table-column>
       <el-table-column label="创建时间" width="170">
@@ -76,8 +73,6 @@ import axios from 'axios'
 const authHeaders = () => ({
   Authorization: `Bearer ${localStorage.getItem('token')}`
 })
-
-const maxRows = 500000
 
 const siteList = ref([])
 const submitting = ref(false)
@@ -280,10 +275,6 @@ onUnmounted(() => {
 .text-error {
   color: #f56c6c;
   cursor: help;
-}
-
-.text-warning {
-  color: #e6a23c;
 }
 
 @media (max-width: 768px) {

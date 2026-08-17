@@ -106,7 +106,6 @@ type CustomSqlExportJob struct {
 	FilePath       string             `bson:"file_path,omitempty" json:"-"`
 	FileName       string             `bson:"file_name,omitempty" json:"fileName,omitempty"`
 	RowCount       int                `bson:"row_count" json:"rowCount"`
-	Truncated      bool               `bson:"truncated,omitempty" json:"truncated,omitempty"`
 	CreatedAt      time.Time          `bson:"created_at" json:"createdAt"`
 	UpdatedAt      time.Time          `bson:"updated_at" json:"updatedAt"`
 }

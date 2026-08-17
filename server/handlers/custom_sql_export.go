@@ -18,6 +18,7 @@ import (
 	"balanceserver/models"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-sql-driver/mysql"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -27,8 +28,7 @@ import (
 const (
 	customSqlExportDataDir  = "data/custom_sql_exports"
 	customSqlExportJobTTL   = 24 * time.Hour
-	customSqlExportRunLimit = 5 * time.Minute
-	customSqlExportMaxRows  = 500000
+	customSqlExportRunLimit = 30 * time.Minute
 	customSqlExportMaxLen   = 20000
 )
 
@@ -94,6 +94,25 @@ func sanitizeReadOnlyQuery(raw string) (string, error) {
 
 func ensureCustomSqlExportDir() error {
 	return os.MkdirAll(customSqlExportDataDir, 0o755)
+}
+
+// openMySQLForExport is like openMySQLWithTimeout but with a much longer
+// read timeout: custom queries can scan millions of rows with no LIMIT, so a
+// 60s read timeout (fine for the indexed, bounded bill-export queries) would
+// abort large-but-legitimate exports before they finish.
+func openMySQLForExport(dsn string) (*sql.DB, error) {
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("解析 DSN 失败: %w", err)
+	}
+	cfg.Timeout = 5 * time.Second
+	cfg.ReadTimeout = customSqlExportRunLimit
+	cfg.WriteTimeout = 60 * time.Second
+	connector, err := mysql.NewConnector(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return sql.OpenDB(connector), nil
 }
 
 // CreateCustomSqlExportJobHandler validates the submitted SQL, records a
@@ -168,7 +187,7 @@ func runCustomSqlExportJob(jobID primitive.ObjectID, dsn string, query string) {
 		"status": "running", "updated_at": time.Now(),
 	}})
 
-	db, err := openMySQLWithTimeout(dsn)
+	db, err := openMySQLForExport(dsn)
 	if err != nil {
 		failJob(fmt.Sprintf("打开数据库连接失败: %v", err))
 		return
@@ -238,13 +257,8 @@ func runCustomSqlExportJob(jobID primitive.ObjectID, dsn string, query string) {
 	}
 
 	rowCount := 0
-	truncated := false
 	record := make([]string, len(cols))
 	for rows.Next() {
-		if rowCount >= customSqlExportMaxRows {
-			truncated = true
-			break
-		}
 		if err := rows.Scan(scanArgs...); err != nil {
 			failJob(fmt.Sprintf("解析查询结果失败: %v", err))
 			return
@@ -274,9 +288,9 @@ func runCustomSqlExportJob(jobID primitive.ObjectID, dsn string, query string) {
 
 	CustomSqlExportJobCol.UpdateByID(ctx, jobID, bson.M{"$set": bson.M{
 		"status": "completed", "error": "", "file_path": filePath, "file_name": fileName,
-		"row_count": rowCount, "truncated": truncated, "updated_at": time.Now(),
+		"row_count": rowCount, "updated_at": time.Now(),
 	}})
-	log.Printf("[custom-sql-export] job %s completed: %d rows (truncated=%v) -> %s", jobID.Hex(), rowCount, truncated, filePath)
+	log.Printf("[custom-sql-export] job %s completed: %d rows -> %s", jobID.Hex(), rowCount, filePath)
 }
 
 func ListCustomSqlExportJobsHandler(c *gin.Context) {
