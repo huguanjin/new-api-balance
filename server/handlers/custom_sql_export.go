@@ -2,9 +2,12 @@ package handlers
 
 import (
 	"archive/zip"
+	"compress/gzip"
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/csv"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"balanceserver/models"
@@ -26,11 +30,64 @@ import (
 )
 
 const (
-	customSqlExportDataDir  = "data/custom_sql_exports"
-	customSqlExportJobTTL   = 24 * time.Hour
-	customSqlExportRunLimit = 30 * time.Minute
-	customSqlExportMaxLen   = 20000
+	customSqlExportDataDir    = "data/custom_sql_exports"
+	customSqlExportJobTTL     = 24 * time.Hour
+	customSqlExportRunLimit   = 30 * time.Minute
+	customSqlExportMaxLen     = 20000
+	customSqlDownloadTokenTTL = 60 * time.Second
 )
+
+// customSqlDownloadTokens holds short-lived, single-use download tokens.
+// Browser-native navigation (a plain <a href> click) is what lets large
+// export files stream straight to disk instead of being buffered fully in
+// memory by axios/blob, but native navigation can't carry an Authorization
+// header - so a normal authenticated request exchanges the job for a token
+// here, and the actual file transfer is authorized by that token instead.
+var (
+	customSqlDownloadTokens   = map[string]customSqlDownloadTokenEntry{}
+	customSqlDownloadTokensMu sync.Mutex
+)
+
+type customSqlDownloadTokenEntry struct {
+	JobID     primitive.ObjectID
+	Format    string
+	ExpiresAt time.Time
+}
+
+func issueCustomSqlDownloadToken(jobID primitive.ObjectID, format string) (string, error) {
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	token := hex.EncodeToString(buf)
+
+	customSqlDownloadTokensMu.Lock()
+	defer customSqlDownloadTokensMu.Unlock()
+	now := time.Now()
+	for k, v := range customSqlDownloadTokens {
+		if now.After(v.ExpiresAt) {
+			delete(customSqlDownloadTokens, k)
+		}
+	}
+	customSqlDownloadTokens[token] = customSqlDownloadTokenEntry{
+		JobID: jobID, Format: format, ExpiresAt: now.Add(customSqlDownloadTokenTTL),
+	}
+	return token, nil
+}
+
+func consumeCustomSqlDownloadToken(token string) (customSqlDownloadTokenEntry, bool) {
+	customSqlDownloadTokensMu.Lock()
+	defer customSqlDownloadTokensMu.Unlock()
+	entry, ok := customSqlDownloadTokens[token]
+	if !ok {
+		return customSqlDownloadTokenEntry{}, false
+	}
+	delete(customSqlDownloadTokens, token)
+	if time.Now().After(entry.ExpiresAt) {
+		return customSqlDownloadTokenEntry{}, false
+	}
+	return entry, true
+}
 
 // customSqlDeniedKeywords blocks statements that write, alter schema, manage
 // sessions/transactions, or read/write files on the DB server. This is a
@@ -346,14 +403,20 @@ func GetCustomSqlExportJobHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, job)
 }
 
-// DownloadCustomSqlExportJobHandler serves the exported CSV as-is, or - when
-// ?format=zip is requested - streams it through a zip writer on the fly so
-// only the raw CSV is ever kept on disk.
-func DownloadCustomSqlExportJobHandler(c *gin.Context) {
+// CreateCustomSqlExportDownloadTokenHandler exchanges a completed job for a
+// short-lived, single-use download token. Called from an authenticated XHR
+// request; the returned token is then used in a plain, unauthenticated GET
+// so the browser can navigate/stream the file directly to disk.
+func CreateCustomSqlExportDownloadTokenHandler(c *gin.Context) {
 	jobID, err := primitive.ObjectIDFromHex(strings.TrimSpace(c.Param("id")))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的任务 ID"})
 		return
+	}
+
+	format := strings.ToLower(c.Query("format"))
+	if format != "zip" {
+		format = "csv"
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -377,8 +440,50 @@ func DownloadCustomSqlExportJobHandler(c *gin.Context) {
 		return
 	}
 
-	if strings.ToLower(c.Query("format")) != "zip" {
-		c.FileAttachment(job.FilePath, job.FileName)
+	token, err := issueCustomSqlDownloadToken(jobID, format)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成下载令牌失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"token": token, "expiresIn": int(customSqlDownloadTokenTTL.Seconds())})
+}
+
+// DownloadCustomSqlExportJobHandler serves the exported CSV gzip-compressed
+// (a plain text/csv shrinks a lot under gzip, which keeps large exports
+// under whatever size/time limit sits in front of this server), or - when
+// the token was issued with format=zip - as a zip archive built on the fly
+// so only the raw CSV is ever kept on disk. Authorization comes from a
+// single-use token (see CreateCustomSqlExportDownloadTokenHandler) rather
+// than the normal JWT header, since this endpoint is hit by a plain browser
+// navigation (<a href>) so the file streams straight to disk instead of
+// being buffered fully in memory as a blob.
+func DownloadCustomSqlExportJobHandler(c *gin.Context) {
+	token := strings.TrimSpace(c.Query("token"))
+	if token == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少下载令牌"})
+		return
+	}
+	entry, ok := consumeCustomSqlDownloadToken(token)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "下载令牌无效或已过期，请重新点击下载"})
+		return
+	}
+	jobID := entry.JobID
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var job models.CustomSqlExportJob
+	if err := CustomSqlExportJobCol.FindOne(ctx, bson.M{"_id": jobID}).Decode(&job); err != nil {
+		if err == mongo.ErrNoDocuments {
+			c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询任务失败"})
+		return
+	}
+	if job.Status != "completed" || job.FilePath == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "任务尚未完成"})
 		return
 	}
 
@@ -389,22 +494,38 @@ func DownloadCustomSqlExportJobHandler(c *gin.Context) {
 	}
 	defer f.Close()
 
-	zipName := strings.TrimSuffix(job.FileName, ".csv") + ".zip"
-	c.Header("Content-Type", "application/zip")
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, zipName))
+	if entry.Format == "zip" {
+		zipName := strings.TrimSuffix(job.FileName, ".csv") + ".zip"
+		c.Header("Content-Type", "application/zip")
+		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, zipName))
 
-	zw := zip.NewWriter(c.Writer)
-	entry, err := zw.Create(job.FileName)
-	if err != nil {
-		log.Printf("[custom-sql-export] zip create entry failed for job %s: %v", jobID.Hex(), err)
+		zw := zip.NewWriter(c.Writer)
+		zipEntry, err := zw.Create(job.FileName)
+		if err != nil {
+			log.Printf("[custom-sql-export] zip create entry failed for job %s: %v", jobID.Hex(), err)
+			return
+		}
+		if _, err := io.Copy(zipEntry, f); err != nil {
+			log.Printf("[custom-sql-export] zip write failed for job %s: %v", jobID.Hex(), err)
+			return
+		}
+		if err := zw.Close(); err != nil {
+			log.Printf("[custom-sql-export] zip close failed for job %s: %v", jobID.Hex(), err)
+		}
 		return
 	}
-	if _, err := io.Copy(entry, f); err != nil {
-		log.Printf("[custom-sql-export] zip write failed for job %s: %v", jobID.Hex(), err)
+
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, job.FileName))
+	c.Header("Content-Encoding", "gzip")
+
+	gz := gzip.NewWriter(c.Writer)
+	if _, err := io.Copy(gz, f); err != nil {
+		log.Printf("[custom-sql-export] gzip write failed for job %s: %v", jobID.Hex(), err)
 		return
 	}
-	if err := zw.Close(); err != nil {
-		log.Printf("[custom-sql-export] zip close failed for job %s: %v", jobID.Hex(), err)
+	if err := gz.Close(); err != nil {
+		log.Printf("[custom-sql-export] gzip close failed for job %s: %v", jobID.Hex(), err)
 	}
 }
 

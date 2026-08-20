@@ -171,26 +171,23 @@ const pollJob = (jobId) => {
   pollTimers.set(jobId, timer)
 }
 
-const downloadJob = (row, format) => {
-  const url = `/api/custom-sql-export/${row.id}/download${format === 'zip' ? '?format=zip' : ''}`
-  axios.get(url, { headers: authHeaders(), responseType: 'blob' })
-    .then((res) => {
-      const isZip = format === 'zip'
-      const blob = new Blob([res.data], { type: isZip ? 'application/zip' : 'text/csv;charset=utf-8;' })
-      const defaultName = isZip
-        ? (row.fileName || '自定义查询.csv').replace(/\.csv$/i, '.zip')
-        : (row.fileName || '自定义查询.csv')
-      const link = document.createElement('a')
-      link.href = URL.createObjectURL(blob)
-      link.download = defaultName
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      URL.revokeObjectURL(link.href)
-    })
-    .catch((e) => {
-      ElMessage.error(e.response?.data?.error || e.message || '下载失败')
-    })
+const downloadJob = async (row, format) => {
+  try {
+    const res = await axios.post(
+      `/api/custom-sql-export/${row.id}/download-token`,
+      null,
+      { params: { format }, headers: authHeaders() }
+    )
+    const url = `/api/custom-sql-export/${row.id}/download?token=${encodeURIComponent(res.data.token)}&format=${format}`
+    const link = document.createElement('a')
+    link.href = url
+    link.rel = 'noopener'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || e.message || '下载失败')
+  }
 }
 
 const formatDateTime = (isoStr) => {
