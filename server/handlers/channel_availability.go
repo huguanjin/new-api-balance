@@ -27,29 +27,31 @@ import (
 const (
 	channelTestConcurrency = 10
 	channelTestTimeout     = 30 * time.Second
+	// 全量模型测试时单个渠道最多测试的模型数，避免渠道挂载模型过多导致测试时间失控
+	maxTestModelsPerChannel = 50
 )
 
 var channelAvailabilityHTTPClient = &http.Client{Timeout: channelTestTimeout}
 
 type upstreamChannelItem struct {
-	ID               int    `json:"id"`
-	Type             int    `json:"type"`
-	Status           int    `json:"status"`
-	Name             string `json:"name"`
-	Weight           int    `json:"weight"`
-	CreatedTime      int64  `json:"created_time"`
-	TestTime         int64  `json:"test_time"`
-	ResponseTime     int    `json:"response_time"`
-	BaseURL          string `json:"base_url"`
-	Balance          float64 `json:"balance"`
-	Models           string `json:"models"`
-	Group            string `json:"group"`
-	UsedQuota        int64  `json:"used_quota"`
-	ModelMapping     string `json:"model_mapping"`
-	Priority         int    `json:"priority"`
-	AutoBan          int    `json:"auto_ban"`
-	Tag              string `json:"tag"`
-	TestModel        string `json:"test_model"`
+	ID           int     `json:"id"`
+	Type         int     `json:"type"`
+	Status       int     `json:"status"`
+	Name         string  `json:"name"`
+	Weight       int     `json:"weight"`
+	CreatedTime  int64   `json:"created_time"`
+	TestTime     int64   `json:"test_time"`
+	ResponseTime int     `json:"response_time"`
+	BaseURL      string  `json:"base_url"`
+	Balance      float64 `json:"balance"`
+	Models       string  `json:"models"`
+	Group        string  `json:"group"`
+	UsedQuota    int64   `json:"used_quota"`
+	ModelMapping string  `json:"model_mapping"`
+	Priority     int     `json:"priority"`
+	AutoBan      int     `json:"auto_ban"`
+	Tag          string  `json:"tag"`
+	TestModel    string  `json:"test_model"`
 }
 
 type upstreamChannelListResponse struct {
@@ -60,13 +62,14 @@ type upstreamChannelListResponse struct {
 }
 
 type channelTestResult struct {
-	ChannelID    int                     `json:"channelId"`
-	Name         string                  `json:"name"`
-	TestModel    string                  `json:"testModel"`
-	Success      bool                    `json:"success"`
-	ResponseTime int                     `json:"responseTime"`
-	Error        string                  `json:"error,omitempty"`
-	ModelResults []channelModelTestDetail `json:"modelResults,omitempty"`
+	ChannelID        int                      `json:"channelId"`
+	Name             string                   `json:"name"`
+	TestModel        string                   `json:"testModel"`
+	Success          bool                     `json:"success"`
+	ResponseTime     int                      `json:"responseTime"`
+	Error            string                   `json:"error,omitempty"`
+	AllModelsBlocked bool                     `json:"allModelsBlocked,omitempty"`
+	ModelResults     []channelModelTestDetail `json:"modelResults,omitempty"`
 }
 
 type channelModelTestDetail struct {
@@ -74,6 +77,33 @@ type channelModelTestDetail struct {
 	Success      bool   `json:"success"`
 	ResponseTime int    `json:"responseTime"`
 	Error        string `json:"error,omitempty"`
+}
+
+var blockedStatusCodePattern = regexp.MustCompile(`(?i)\b(?:status.?code|http)\D{0,4}403\b`)
+
+var blockedMessagePattern = regexp.MustCompile(`(?i)operation is not allow`)
+
+func isBlockedError(errMsg string) bool {
+	if errMsg == "" {
+		return false
+	}
+	cleaned := strings.TrimSpace(errMsg)
+	if strings.HasSuffix(cleaned, "(已过滤)") {
+		return false
+	}
+	return blockedStatusCodePattern.MatchString(cleaned) || blockedMessagePattern.MatchString(cleaned)
+}
+
+func testFailedByAllModelsBlocked(result channelTestResult) bool {
+	if len(result.ModelResults) == 0 {
+		return isBlockedError(result.Error)
+	}
+	for _, mr := range result.ModelResults {
+		if !isBlockedError(mr.Error) {
+			return false
+		}
+	}
+	return true
 }
 
 func FetchUpstreamChannelsHandler(c *gin.Context) {
@@ -202,7 +232,7 @@ func TestChannelAvailabilityHandler(c *gin.Context) {
 	testModel := strings.TrimSpace(req.TestModel)
 	runID := fmt.Sprintf("test-%d", time.Now().UnixNano())
 	cleanTestResults(ctx, "")
-	if err := batchTestChannels(ctx, channels, cred.BaseURL, cred.Token, cred.UserID, testModel, runID, cred.SkipStatusCodes, false); err != nil {
+	if err := batchTestChannels(ctx, channels, cred.BaseURL, cred.Token, cred.UserID, testModel, runID, cred.SkipStatusCodes, false, false); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "测试结果写入失败"})
 		return
 	}
@@ -218,11 +248,11 @@ func TestChannelAvailabilityHandler(c *gin.Context) {
 	failCount := len(classified.All) - successCount
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":      fmt.Sprintf("测试完成：成功 %d，失败 %d，共 %d 个渠道", successCount, failCount, len(classified.All)),
-		"total":        len(classified.All),
+		"message":       fmt.Sprintf("测试完成：成功 %d，失败 %d，共 %d 个渠道", successCount, failCount, len(classified.All)),
+		"total":         len(classified.All),
 		"success_count": successCount,
 		"fail_count":    failCount,
-		"results":      classified.All,
+		"results":       classified.All,
 	})
 }
 
@@ -261,7 +291,7 @@ func TestSingleChannelAvailabilityHandler(c *gin.Context) {
 	}
 
 	testModel := strings.TrimSpace(req.TestModel)
-	result := testOneChannel(ctx, channel, cred.BaseURL, cred.Token, cred.UserID, testModel, cred.SkipStatusCodes, false)
+	result := testOneChannel(ctx, channel, cred.BaseURL, cred.Token, cred.UserID, testModel, cred.SkipStatusCodes, false, false)
 
 	now := time.Now()
 	update := bson.M{
@@ -401,6 +431,65 @@ func SaveChannelCustomTestModelsHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"channelId": channelID, "customTestModels": cleaned})
+}
+
+const channelAvailabilityTestModelsConfigID = "channel_availability_test_models"
+
+func loadChannelAvailabilityTestModels(ctx context.Context) ([]string, error) {
+	var config models.ChannelAvailabilityTestModelsConfig
+	err := ChannelAvailabilityTestModelCol.FindOne(ctx, bson.M{"_id": channelAvailabilityTestModelsConfigID}).Decode(&config)
+	if err == mongo.ErrNoDocuments {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if config.Models == nil {
+		return []string{}, nil
+	}
+	return config.Models, nil
+}
+
+func GetChannelAvailabilityTestModelsHandler(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	testModels, err := loadChannelAvailabilityTestModels(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load test models"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"models": testModels})
+}
+
+func SaveChannelAvailabilityTestModelsHandler(c *gin.Context) {
+	var req struct {
+		Models []string `json:"models"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return
+	}
+
+	cleaned := make([]string, 0, len(req.Models))
+	seen := make(map[string]bool, len(req.Models))
+	for _, m := range req.Models {
+		m = strings.TrimSpace(m)
+		if m == "" || seen[m] {
+			continue
+		}
+		seen[m] = true
+		cleaned = append(cleaned, m)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	update := bson.M{"models": cleaned, "updated_at": time.Now()}
+	opts := options.Update().SetUpsert(true)
+	if _, err := ChannelAvailabilityTestModelCol.UpdateOne(ctx, bson.M{"_id": channelAvailabilityTestModelsConfigID}, bson.M{"$set": update}, opts); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save test models"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"models": cleaned})
 }
 
 func testOneModel(ctx context.Context, channelID int, model string, cred availabilityCredentials) modelTestResult {
@@ -892,25 +981,25 @@ func saveUpstreamChannels(ctx context.Context, items []upstreamChannelItem, site
 	for _, item := range items {
 		doc := models.UpstreamChannel{
 			UpstreamSiteID: siteID,
-			ChannelID:    item.ID,
-			Type:         item.Type,
-			Status:       item.Status,
-			Name:         strings.TrimSpace(item.Name),
-			Weight:       item.Weight,
-			CreatedTime:  item.CreatedTime,
-			TestTime:     item.TestTime,
-			ResponseTime: item.ResponseTime,
-			BaseURL:      strings.TrimSpace(item.BaseURL),
-			Balance:      item.Balance,
-			Models:       item.Models,
-			Group:        item.Group,
-			UsedQuota:    item.UsedQuota,
-			ModelMapping: item.ModelMapping,
-			Priority:     item.Priority,
-			AutoBan:      item.AutoBan,
-			Tag:          strings.TrimSpace(item.Tag),
-			TestModel:    strings.TrimSpace(item.TestModel),
-			FetchedAt:    now,
+			ChannelID:      item.ID,
+			Type:           item.Type,
+			Status:         item.Status,
+			Name:           strings.TrimSpace(item.Name),
+			Weight:         item.Weight,
+			CreatedTime:    item.CreatedTime,
+			TestTime:       item.TestTime,
+			ResponseTime:   item.ResponseTime,
+			BaseURL:        strings.TrimSpace(item.BaseURL),
+			Balance:        item.Balance,
+			Models:         item.Models,
+			Group:          item.Group,
+			UsedQuota:      item.UsedQuota,
+			ModelMapping:   item.ModelMapping,
+			Priority:       item.Priority,
+			AutoBan:        item.AutoBan,
+			Tag:            strings.TrimSpace(item.Tag),
+			TestModel:      strings.TrimSpace(item.TestModel),
+			FetchedAt:      now,
 		}
 		if old, ok := preserve[item.ID]; ok {
 			doc.CustomTestModels = old.CustomTestModels
@@ -947,7 +1036,7 @@ func listUpstreamChannels(ctx context.Context, siteID primitive.ObjectID) ([]mod
 	return channels, nil
 }
 
-func batchTestChannels(ctx context.Context, channels []models.UpstreamChannel, baseURL, token, userID, testModel, runID string, skipStatusCodes []int, anyModelSuccess bool) error {
+func batchTestChannels(ctx context.Context, channels []models.UpstreamChannel, baseURL, token, userID, testModel, runID string, skipStatusCodes []int, anyModelSuccess, testAllModels bool) error {
 	sem := make(chan struct{}, channelTestConcurrency)
 	var wg sync.WaitGroup
 	var firstErr error
@@ -960,7 +1049,7 @@ func batchTestChannels(ctx context.Context, channels []models.UpstreamChannel, b
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			result := testOneChannel(ctx, channel, baseURL, token, userID, testModel, skipStatusCodes, anyModelSuccess)
+			result := testOneChannel(ctx, channel, baseURL, token, userID, testModel, skipStatusCodes, anyModelSuccess, testAllModels)
 
 			now := time.Now()
 			update := bson.M{
@@ -986,21 +1075,23 @@ func batchTestChannels(ctx context.Context, channels []models.UpstreamChannel, b
 					modelDetails = append(modelDetails, models.ChannelTestResultDetail{
 						Model:        mr.Model,
 						Success:      mr.Success,
+						Blocked:      isBlockedError(mr.Error),
 						ResponseTime: mr.ResponseTime,
 						Error:        mr.Error,
 					})
 				}
 				doc := models.ChannelTestResult{
-					RunID:        runID,
-					ChannelID:    result.ChannelID,
-					Name:         result.Name,
-					TestModel:    result.TestModel,
-					Success:      result.Success,
-					ResponseTime: result.ResponseTime,
-					Error:        result.Error,
-					ModelResults: modelDetails,
-					Status:       channel.Status,
-					TestedAt:     now,
+					RunID:            runID,
+					ChannelID:        result.ChannelID,
+					Name:             result.Name,
+					TestModel:        result.TestModel,
+					Success:          result.Success,
+					AllModelsBlocked: result.AllModelsBlocked,
+					ResponseTime:     result.ResponseTime,
+					Error:            result.Error,
+					ModelResults:     modelDetails,
+					Status:           channel.Status,
+					TestedAt:         now,
 				}
 				insertCtx, insertCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer insertCancel()
@@ -1041,6 +1132,7 @@ type classifiedResults struct {
 	EnabledFailed   []channelTestResult
 	DisabledSuccess []channelTestResult
 	EnabledSlow     []channelTestResult
+	BlockedAll      []channelTestResult
 	SuccessCount    int
 }
 
@@ -1067,6 +1159,7 @@ func classifyTestResults(ctx context.Context, runID string, slowThresholdMs int)
 				Error:        mr.Error,
 			})
 		}
+		r.AllModelsBlocked = doc.AllModelsBlocked
 		cr.All = append(cr.All, r)
 		if r.Success {
 			cr.SuccessCount++
@@ -1078,11 +1171,32 @@ func classifyTestResults(ctx context.Context, runID string, slowThresholdMs int)
 		} else if doc.Status == 1 && r.Success && slowThresholdMs > 0 && r.ResponseTime > slowThresholdMs {
 			cr.EnabledSlow = append(cr.EnabledSlow, r)
 		}
+		if doc.Status == 1 && r.AllModelsBlocked {
+			cr.BlockedAll = append(cr.BlockedAll, r)
+		}
 	}
 	return cr, nil
 }
 
-func testOneChannel(ctx context.Context, channel models.UpstreamChannel, baseURL, token, userID, testModel string, skipStatusCodes []int, anyModelSuccess bool) channelTestResult {
+func parseChannelModels(modelsField string, limit int) []string {
+	parts := strings.Split(modelsField, ",")
+	result := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, m := range parts {
+		m = strings.TrimSpace(m)
+		if m == "" || seen[m] {
+			continue
+		}
+		seen[m] = true
+		result = append(result, m)
+		if limit > 0 && len(result) >= limit {
+			break
+		}
+	}
+	return result
+}
+
+func testOneChannel(ctx context.Context, channel models.UpstreamChannel, baseURL, token, userID, testModel string, skipStatusCodes []int, anyModelSuccess, testAllModels bool) channelTestResult {
 	result := channelTestResult{
 		ChannelID: channel.ChannelID,
 		Name:      channel.Name,
@@ -1091,19 +1205,14 @@ func testOneChannel(ctx context.Context, channel models.UpstreamChannel, baseURL
 	var modelsToTest []string
 	if testModel != "" {
 		modelsToTest = []string{testModel}
+	} else if testAllModels {
+		modelsToTest = parseChannelModels(channel.Models, maxTestModelsPerChannel)
 	} else if len(channel.CustomTestModels) > 0 {
 		modelsToTest = channel.CustomTestModels
 	} else if channel.TestModel != "" {
 		modelsToTest = []string{channel.TestModel}
 	} else {
-		parts := strings.Split(channel.Models, ",")
-		for _, m := range parts {
-			m = strings.TrimSpace(m)
-			if m != "" {
-				modelsToTest = []string{m}
-				break
-			}
-		}
+		modelsToTest = parseChannelModels(channel.Models, 1)
 	}
 	if len(modelsToTest) == 0 {
 		modelsToTest = []string{"gpt-3.5-turbo"}
@@ -1113,9 +1222,13 @@ func testOneChannel(ctx context.Context, channel models.UpstreamChannel, baseURL
 
 	if len(modelsToTest) == 1 {
 		detail := testSingleModel(ctx, channel.ChannelID, modelsToTest[0], baseURL, token, userID, skipStatusCodes)
+		result.ModelResults = []channelModelTestDetail{detail}
 		result.Success = detail.Success
 		result.ResponseTime = detail.ResponseTime
-		result.Error = detail.Error
+		if !detail.Success {
+			result.Error = fmt.Sprintf("%s: %s", detail.Model, detail.Error)
+		}
+		result.AllModelsBlocked = testFailedByAllModelsBlocked(result)
 		return result
 	}
 
@@ -1147,6 +1260,7 @@ func testOneChannel(ctx context.Context, channel models.UpstreamChannel, baseURL
 	if !result.Success {
 		result.Error = strings.Join(failErrors, "; ")
 	}
+	result.AllModelsBlocked = testFailedByAllModelsBlocked(result)
 	return result
 }
 
@@ -1325,22 +1439,25 @@ func SaveChannelAvailabilityGlobalNotifyConfigHandler(c *gin.Context) {
 
 func SaveChannelAvailabilityNotifyConfigHandler(c *gin.Context) {
 	var req struct {
-		UpstreamSiteID   string                        `json:"upstreamSiteId"`
-		Enabled          bool                          `json:"enabled"`
-		NotificationType string                        `json:"notificationType"`
-		WebhookURL       string                        `json:"webhookUrl"`
-		SignKey          string                        `json:"signKey"`
-		WeworkWebhookURL string                        `json:"weworkWebhookUrl"`
-		RefreshChannels  *bool                         `json:"refreshChannels"`
+		UpstreamSiteID   string `json:"upstreamSiteId"`
+		Enabled          bool   `json:"enabled"`
+		NotificationType string `json:"notificationType"`
+		WebhookURL       string `json:"webhookUrl"`
+		SignKey          string `json:"signKey"`
+		WeworkWebhookURL string `json:"weworkWebhookUrl"`
+		RefreshChannels  *bool  `json:"refreshChannels"`
 		MonitoringGroups []struct {
-			Name            string                        `json:"name"`
-			ChannelIDs      []int                         `json:"channelIds"`
-			StatusFilter    int                           `json:"statusFilter"`
-			AutoToggle      bool                          `json:"autoToggle"`
-			AnyModelSuccess bool                          `json:"anyModelSuccess"`
-			SlowThresholdMs int                           `json:"slowThresholdMs"`
-			SkipStatusCodes []int                         `json:"skipStatusCodes"`
-			Schedules       []models.NotificationSchedule `json:"schedules"`
+			Name               string                        `json:"name"`
+			ChannelIDs         []int                         `json:"channelIds"`
+			StatusFilter       int                           `json:"statusFilter"`
+			AutoToggle         bool                          `json:"autoToggle"`
+			AnyModelSuccess    bool                          `json:"anyModelSuccess"`
+			TestAllModels      bool                          `json:"testAllModels"`
+			DisableWhenBlocked bool                          `json:"disableWhenBlocked"`
+			AlwaysNotify       bool                          `json:"alwaysNotify"`
+			SlowThresholdMs    int                           `json:"slowThresholdMs"`
+			SkipStatusCodes    []int                         `json:"skipStatusCodes"`
+			Schedules          []models.NotificationSchedule `json:"schedules"`
 		} `json:"monitoringGroups"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1373,14 +1490,17 @@ func SaveChannelAvailabilityNotifyConfigHandler(c *gin.Context) {
 			return
 		}
 		groups = append(groups, models.MonitoringGroup{
-			Name:            name,
-			ChannelIDs:      g.ChannelIDs,
-			StatusFilter:    g.StatusFilter,
-			AutoToggle:      g.AutoToggle,
-			AnyModelSuccess: g.AnyModelSuccess,
-			SlowThresholdMs: g.SlowThresholdMs,
-			SkipStatusCodes: g.SkipStatusCodes,
-			Schedules:       schedules,
+			Name:               name,
+			ChannelIDs:         g.ChannelIDs,
+			StatusFilter:       g.StatusFilter,
+			AutoToggle:         g.AutoToggle,
+			AnyModelSuccess:    g.AnyModelSuccess,
+			TestAllModels:      g.TestAllModels,
+			DisableWhenBlocked: g.DisableWhenBlocked,
+			AlwaysNotify:       g.AlwaysNotify,
+			SlowThresholdMs:    g.SlowThresholdMs,
+			SkipStatusCodes:    g.SkipStatusCodes,
+			Schedules:          schedules,
 		})
 	}
 
@@ -1410,11 +1530,11 @@ func SaveChannelAvailabilityNotifyConfigHandler(c *gin.Context) {
 		"updated_at":         now,
 	}
 	unset := bson.M{
-		"channel_ids":      "",
-		"schedules":        "",
-		"last_attempt_at":  "",
-		"status_filter":    "",
-		"auto_toggle":      "",
+		"channel_ids":       "",
+		"schedules":         "",
+		"last_attempt_at":   "",
+		"status_filter":     "",
+		"auto_toggle":       "",
 		"slow_threshold_ms": "",
 	}
 	opts := options.Update().SetUpsert(true)
@@ -1509,6 +1629,7 @@ type globalSiteNotifyResult struct {
 	EnabledFailed   []channelTestResult
 	DisabledSuccess []channelTestResult
 	EnabledSlow     []channelTestResult
+	BlockedAll      []channelTestResult
 	MissingIDs      []int
 	ToggleResults   []channelStatusChangeResult
 	SuccessCount    int
@@ -1647,7 +1768,7 @@ func runChannelAvailabilityGlobalNotifyAsync(configs []models.ChannelAvailabilit
 
 			skipCodes := resolveGroupSkipStatusCodes(group, cred)
 			runID := fmt.Sprintf("global-%d-%s-%d", time.Now().UnixNano(), siteID.Hex(), gi)
-			if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, skipCodes, group.AnyModelSuccess); err != nil {
+			if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, skipCodes, group.AnyModelSuccess, group.TestAllModels); err != nil {
 				log.Printf("[global-notify-run] 测试结果写入失败 group=%s: %s", group.Name, err.Error())
 				continue
 			}
@@ -1671,6 +1792,10 @@ func runChannelAvailabilityGlobalNotifyAsync(configs []models.ChannelAvailabilit
 					toggleResults = append(toggleResults, tr)
 				}
 			}
+			// AutoToggle 开启时，被拦截渠道已在上面按失败停用，无需重复处理
+			if group.DisableWhenBlocked && !group.AutoToggle && len(classified.BlockedAll) > 0 {
+				toggleResults = append(toggleResults, disableAllModelsBlockedChannels(ctx, classified.BlockedAll, cred)...)
+			}
 
 			cleanTestResults(ctx, runID)
 			nowTs := time.Now()
@@ -1679,7 +1804,7 @@ func runChannelAvailabilityGlobalNotifyAsync(configs []models.ChannelAvailabilit
 			}})
 
 			hasChanges := len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0
-			if hasChanges || alwaysNotify {
+			if hasChanges || alwaysNotify || group.AlwaysNotify {
 				siteNotifyResults = append(siteNotifyResults, globalSiteNotifyResult{
 					SiteName:        siteName,
 					GroupName:       group.Name,
@@ -1690,6 +1815,7 @@ func runChannelAvailabilityGlobalNotifyAsync(configs []models.ChannelAvailabilit
 					EnabledFailed:   enabledFailed,
 					DisabledSuccess: disabledSuccess,
 					EnabledSlow:     enabledSlow,
+					BlockedAll:      classified.BlockedAll,
 					MissingIDs:      missingIDs,
 					ToggleResults:   toggleResults,
 					SuccessCount:    classified.SuccessCount,
@@ -1826,6 +1952,22 @@ func buildGlobalAvailabilityNotifyMessage(sites []globalSiteNotifyResult) string
 					}
 				}
 				b.WriteString(fmt.Sprintf("  ⏱️ %s (ID:%d) | 测试模型: %s | 响应: %dms | %s\n", r.Name, r.ChannelID, r.TestModel, r.ResponseTime, action))
+				writeModelResultDetails(&b, r)
+			}
+		}
+
+		if len(site.BlockedAll) > 0 {
+			b.WriteString(fmt.Sprintf("\n⛔ 以下已启用渠道所有模型均返回 403 / Operation is not allow（%d个）：\n", len(site.BlockedAll)))
+			for _, r := range site.BlockedAll {
+				action := "建议：停用该渠道"
+				if success, ok := toggleResultMap[r.ChannelID]; ok {
+					if success {
+						action = "已自动停用 ✅"
+					} else {
+						action = "自动停用失败 ❗"
+					}
+				}
+				b.WriteString(fmt.Sprintf("  ⛔ %s (ID:%d) | 共 %d 个模型全部被拦截 | %s\n", r.Name, r.ChannelID, len(r.ModelResults), action))
 				writeModelResultDetails(&b, r)
 			}
 		}
@@ -1981,7 +2123,7 @@ func runChannelAvailabilityNotifyAsync(notifyConfig models.ChannelAvailabilityNo
 
 		skipCodes := resolveGroupSkipStatusCodes(group, cred)
 		runID := fmt.Sprintf("notify-%d-%d", time.Now().UnixNano(), gi)
-		if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, skipCodes, group.AnyModelSuccess); err != nil {
+		if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, skipCodes, group.AnyModelSuccess, group.TestAllModels); err != nil {
 			log.Printf("[notify-run] 测试结果写入失败 group=%s: %s", group.Name, err.Error())
 			continue
 		}
@@ -2005,10 +2147,14 @@ func runChannelAvailabilityNotifyAsync(notifyConfig models.ChannelAvailabilityNo
 				toggleResults = append(toggleResults, tr)
 			}
 		}
+		// AutoToggle 开启时，被拦截渠道已在上面按失败停用，无需重复处理
+		if group.DisableWhenBlocked && !group.AutoToggle && len(classified.BlockedAll) > 0 {
+			toggleResults = append(toggleResults, disableAllModelsBlockedChannels(ctx, classified.BlockedAll, cred)...)
+		}
 
-		if len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0 {
-			card := buildAvailabilityNotifyCard(displayName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, group.AutoToggle, group.SlowThresholdMs, toggleResults)
-			msg := buildAvailabilityNotifyMessage(displayName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, group.AutoToggle, group.SlowThresholdMs, toggleResults)
+		if group.AlwaysNotify || len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0 {
+			card := buildAvailabilityNotifyCard(displayName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, group.AutoToggle, group.SlowThresholdMs, toggleResults, classified.BlockedAll)
+			msg := buildAvailabilityNotifyMessage(displayName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, group.AutoToggle, group.SlowThresholdMs, toggleResults, classified.BlockedAll)
 			if err := sendAvailabilityCardNotification(ctx, nType, webhookURL, signKey, card, msg); err != nil {
 				log.Printf("[notify-run] 推送通知失败 group=%s: %s", group.Name, err.Error())
 			}
@@ -2277,7 +2423,7 @@ func buildSlowChannelLine(r channelTestResult, autoToggle bool, toggleMap map[in
 	return b.String()
 }
 
-func buildAvailabilityNotifyCard(siteName string, allResults []channelTestResult, enabledFailed, disabledSuccess, enabledSlow []channelTestResult, missingIDs []int, autoToggle bool, slowThresholdMs int, toggleResults []channelStatusChangeResult) map[string]interface{} {
+func buildAvailabilityNotifyCard(siteName string, allResults []channelTestResult, enabledFailed, disabledSuccess, enabledSlow []channelTestResult, missingIDs []int, autoToggle bool, slowThresholdMs int, toggleResults []channelStatusChangeResult, blockedAll []channelTestResult) map[string]interface{} {
 	successCount := 0
 	for _, r := range allResults {
 		if r.Success {
@@ -2354,6 +2500,28 @@ func buildAvailabilityNotifyCard(siteName string, allResults []channelTestResult
 			elements = append(elements, map[string]interface{}{
 				"tag":  "div",
 				"text": feishuMarkdown(buildSlowChannelLine(r, autoToggle, toggleMap)),
+			})
+		}
+	}
+
+	if len(blockedAll) > 0 {
+		elements = append(elements, map[string]interface{}{"tag": "hr"})
+		elements = append(elements, map[string]interface{}{
+			"tag":  "div",
+			"text": feishuMarkdown(fmt.Sprintf("⛔ **所有模型均被拦截的已启用渠道（%d个）**", len(blockedAll))),
+		})
+		for _, r := range blockedAll {
+			action := "建议：停用该渠道"
+			if success, ok := toggleMap[r.ChannelID]; ok {
+				if success {
+					action = "已自动停用 ✅"
+				} else {
+					action = "自动停用失败 ❗"
+				}
+			}
+			elements = append(elements, map[string]interface{}{
+				"tag":  "div",
+				"text": feishuMarkdown(fmt.Sprintf("⛔ **%s** (ID:%d)\n共 %d 个模型全部返回 403 / Operation is not allow | %s", r.Name, r.ChannelID, len(r.ModelResults), action)),
 			})
 		}
 	}
@@ -2471,6 +2639,27 @@ func buildGlobalAvailabilityNotifyCard(sites []globalSiteNotifyResult) map[strin
 			}
 		}
 
+		if len(site.BlockedAll) > 0 {
+			elements = append(elements, map[string]interface{}{
+				"tag":  "div",
+				"text": feishuMarkdown(fmt.Sprintf("⛔ **所有模型均被拦截（%d个）**", len(site.BlockedAll))),
+			})
+			for _, r := range site.BlockedAll {
+				action := "建议：停用该渠道"
+				if success, ok := toggleMap[r.ChannelID]; ok {
+					if success {
+						action = "已自动停用 ✅"
+					} else {
+						action = "自动停用失败 ❗"
+					}
+				}
+				elements = append(elements, map[string]interface{}{
+					"tag":  "div",
+					"text": feishuMarkdown(fmt.Sprintf("⛔ **%s** (ID:%d)\n共 %d 个模型全部返回 403 / Operation is not allow | %s", r.Name, r.ChannelID, len(r.ModelResults), action)),
+				})
+			}
+		}
+
 		if len(site.MissingIDs) > 0 {
 			elements = append(elements, map[string]interface{}{
 				"tag":  "div",
@@ -2509,6 +2698,16 @@ func autoToggleChannels(ctx context.Context, enabledFailed, disabledSuccess []ch
 	return results
 }
 
+// 渠道下所有模型均返回 403 / Operation is not allow 时，判定为整渠道被上游拦截并直接停用
+func disableAllModelsBlockedChannels(ctx context.Context, blocked []channelTestResult, cred availabilityCredentials) []channelStatusChangeResult {
+	var results []channelStatusChangeResult
+	for _, r := range blocked {
+		tr := updateOneChannelStatus(ctx, r.ChannelID, r.Name, 2, cred)
+		results = append(results, tr)
+	}
+	return results
+}
+
 func writeModelResultDetails(b *strings.Builder, r channelTestResult) {
 	if len(r.ModelResults) <= 1 {
 		return
@@ -2526,7 +2725,7 @@ func writeModelResultDetails(b *strings.Builder, r channelTestResult) {
 	}
 }
 
-func buildAvailabilityNotifyMessage(siteName string, allResults []channelTestResult, enabledFailed, disabledSuccess, enabledSlow []channelTestResult, missingIDs []int, autoToggle bool, slowThresholdMs int, toggleResults []channelStatusChangeResult) string {
+func buildAvailabilityNotifyMessage(siteName string, allResults []channelTestResult, enabledFailed, disabledSuccess, enabledSlow []channelTestResult, missingIDs []int, autoToggle bool, slowThresholdMs int, toggleResults []channelStatusChangeResult, blockedAll []channelTestResult) string {
 	var b strings.Builder
 	successCount := 0
 	for _, r := range allResults {
@@ -2598,6 +2797,22 @@ func buildAvailabilityNotifyMessage(siteName string, allResults []channelTestRes
 				}
 			}
 			b.WriteString(fmt.Sprintf("  ⏱️ %s (ID:%d) | 测试模型: %s | 响应: %dms | %s\n", r.Name, r.ChannelID, r.TestModel, r.ResponseTime, action))
+			writeModelResultDetails(&b, r)
+		}
+	}
+
+	if len(blockedAll) > 0 {
+		b.WriteString(fmt.Sprintf("\n⛔ 以下已启用渠道所有模型均返回 403 / Operation is not allow（%d个）：\n", len(blockedAll)))
+		for _, r := range blockedAll {
+			action := "建议：停用该渠道"
+			if autoToggle || toggleResultMap[r.ChannelID] {
+				if toggleResultMap[r.ChannelID] {
+					action = "已自动停用 ✅"
+				} else {
+					action = "自动停用失败 ❗"
+				}
+			}
+			b.WriteString(fmt.Sprintf("  ⛔ %s (ID:%d) | 共 %d 个模型全部被拦截 | %s\n", r.Name, r.ChannelID, len(r.ModelResults), action))
 			writeModelResultDetails(&b, r)
 		}
 	}
@@ -2696,7 +2911,7 @@ func runScheduledChannelAvailabilityNotify() {
 			}
 		}
 
-		result := runAndCollectGroupResult(ctx, entry.config, group, globalConfig.AlwaysNotify)
+		result := runAndCollectGroupResult(ctx, entry.config, group)
 		if result != nil {
 			siteNotifyResults = append(siteNotifyResults, *result)
 		}
@@ -2725,7 +2940,7 @@ func resolveGroupSkipStatusCodes(group models.MonitoringGroup, cred availability
 	return cred.SkipStatusCodes
 }
 
-func runAndCollectGroupResult(ctx context.Context, config models.ChannelAvailabilityNotifyConfig, group models.MonitoringGroup, alwaysNotify bool) *globalSiteNotifyResult {
+func runAndCollectGroupResult(ctx context.Context, config models.ChannelAvailabilityNotifyConfig, group models.MonitoringGroup) *globalSiteNotifyResult {
 	siteID := config.UpstreamSiteID
 	siteName := ""
 	if site, sErr := loadUpstreamSite(ctx, siteID); sErr == nil {
@@ -2793,7 +3008,7 @@ func runAndCollectGroupResult(ctx context.Context, config models.ChannelAvailabi
 
 	skipCodes := resolveGroupSkipStatusCodes(group, cred)
 	runID := fmt.Sprintf("sched-%d-%s", time.Now().UnixNano(), siteID.Hex())
-	if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, skipCodes, group.AnyModelSuccess); err != nil {
+	if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, skipCodes, group.AnyModelSuccess, group.TestAllModels); err != nil {
 		log.Printf("[channel-availability-scheduler] site %s group %s write test results error: %v", siteID.Hex(), group.Name, err)
 		return nil
 	}
@@ -2817,10 +3032,14 @@ func runAndCollectGroupResult(ctx context.Context, config models.ChannelAvailabi
 			toggleResults = append(toggleResults, tr)
 		}
 	}
+	// AutoToggle 开启时，被拦截渠道已在上面按失败停用，无需重复处理
+	if group.DisableWhenBlocked && !group.AutoToggle && len(classified.BlockedAll) > 0 {
+		toggleResults = append(toggleResults, disableAllModelsBlockedChannels(ctx, classified.BlockedAll, cred)...)
+	}
 
 	cleanTestResults(ctx, runID)
 
-	if !alwaysNotify && len(enabledFailed) == 0 && len(disabledSuccess) == 0 && len(enabledSlow) == 0 {
+	if !group.AlwaysNotify && len(enabledFailed) == 0 && len(disabledSuccess) == 0 && len(enabledSlow) == 0 {
 		return nil
 	}
 
@@ -2834,6 +3053,7 @@ func runAndCollectGroupResult(ctx context.Context, config models.ChannelAvailabi
 		EnabledFailed:   enabledFailed,
 		DisabledSuccess: disabledSuccess,
 		EnabledSlow:     enabledSlow,
+		BlockedAll:      classified.BlockedAll,
 		MissingIDs:      missingIDs,
 		ToggleResults:   toggleResults,
 		SuccessCount:    classified.SuccessCount,
@@ -2927,7 +3147,7 @@ func runScheduledNotifyForGroup(ctx context.Context, config models.ChannelAvaila
 
 	skipCodes := resolveGroupSkipStatusCodes(group, cred)
 	runID := fmt.Sprintf("sched-%d", time.Now().UnixNano())
-	if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, skipCodes, group.AnyModelSuccess); err != nil {
+	if err := batchTestChannels(ctx, targetChannels, cred.BaseURL, cred.Token, cred.UserID, "", runID, skipCodes, group.AnyModelSuccess, group.TestAllModels); err != nil {
 		log.Printf("[channel-availability-scheduler] site %s group %s write test results error: %v", siteID.Hex(), group.Name, err)
 		return
 	}
@@ -2950,10 +3170,14 @@ func runScheduledNotifyForGroup(ctx context.Context, config models.ChannelAvaila
 			toggleResults = append(toggleResults, tr)
 		}
 	}
+	// AutoToggle 开启时，被拦截渠道已在上面按失败停用，无需重复处理
+	if group.DisableWhenBlocked && !group.AutoToggle && len(classified.BlockedAll) > 0 {
+		toggleResults = append(toggleResults, disableAllModelsBlockedChannels(ctx, classified.BlockedAll, cred)...)
+	}
 
-	if len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0 {
-		card := buildAvailabilityNotifyCard(displayName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, group.AutoToggle, group.SlowThresholdMs, toggleResults)
-		msg := buildAvailabilityNotifyMessage(displayName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, group.AutoToggle, group.SlowThresholdMs, toggleResults)
+	if group.AlwaysNotify || len(enabledFailed) > 0 || len(disabledSuccess) > 0 || len(enabledSlow) > 0 {
+		card := buildAvailabilityNotifyCard(displayName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, group.AutoToggle, group.SlowThresholdMs, toggleResults, classified.BlockedAll)
+		msg := buildAvailabilityNotifyMessage(displayName, classified.All, enabledFailed, disabledSuccess, enabledSlow, missingIDs, group.AutoToggle, group.SlowThresholdMs, toggleResults, classified.BlockedAll)
 		if err := sendAvailabilityCardNotification(ctx, nType, webhookURL, signKey, card, msg); err != nil {
 			log.Printf("[channel-availability-scheduler] site %s group %s send notification error: %v", siteID.Hex(), group.Name, err)
 		}

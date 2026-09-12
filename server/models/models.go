@@ -141,15 +141,18 @@ type ModelDetectionNotificationConfig struct {
 }
 
 type MonitoringGroup struct {
-	Name            string                 `bson:"name" json:"name"`
-	ChannelIDs      []int                  `bson:"channel_ids" json:"channelIds"`
-	StatusFilter    int                    `bson:"status_filter" json:"statusFilter"`
-	AutoToggle      bool                   `bson:"auto_toggle" json:"autoToggle"`
-	AnyModelSuccess bool                   `bson:"any_model_success" json:"anyModelSuccess"`
-	SlowThresholdMs int                    `bson:"slow_threshold_ms" json:"slowThresholdMs"`
-	SkipStatusCodes []int                  `bson:"skip_status_codes,omitempty" json:"skipStatusCodes,omitempty"`
-	Schedules       []NotificationSchedule `bson:"schedules" json:"schedules"`
-	LastAttemptAt   *time.Time             `bson:"last_attempt_at,omitempty" json:"lastAttemptAt,omitempty"`
+	Name               string                 `bson:"name" json:"name"`
+	ChannelIDs         []int                  `bson:"channel_ids" json:"channelIds"`
+	StatusFilter       int                    `bson:"status_filter" json:"statusFilter"`
+	AutoToggle         bool                   `bson:"auto_toggle" json:"autoToggle"`
+	AnyModelSuccess    bool                   `bson:"any_model_success" json:"anyModelSuccess"`
+	TestAllModels      bool                   `bson:"test_all_models,omitempty" json:"testAllModels,omitempty"`
+	DisableWhenBlocked bool                   `bson:"disable_when_blocked,omitempty" json:"disableWhenBlocked,omitempty"`
+	AlwaysNotify       bool                   `bson:"always_notify,omitempty" json:"alwaysNotify,omitempty"`
+	SlowThresholdMs    int                    `bson:"slow_threshold_ms" json:"slowThresholdMs"`
+	SkipStatusCodes    []int                  `bson:"skip_status_codes,omitempty" json:"skipStatusCodes,omitempty"`
+	Schedules          []NotificationSchedule `bson:"schedules" json:"schedules"`
+	LastAttemptAt      *time.Time             `bson:"last_attempt_at,omitempty" json:"lastAttemptAt,omitempty"`
 }
 
 type ChannelAvailabilityNotifyConfig struct {
@@ -182,53 +185,61 @@ type ChannelAvailabilityGlobalNotifyConfig struct {
 	UpdatedAt        time.Time              `bson:"updated_at" json:"updatedAt"`
 }
 
+type ChannelAvailabilityTestModelsConfig struct {
+	ID        string    `bson:"_id,omitempty" json:"-"`
+	Models    []string  `bson:"models" json:"models"`
+	UpdatedAt time.Time `bson:"updated_at" json:"updatedAt"`
+}
+
 type UpstreamChannel struct {
 	ID               primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	UpstreamSiteID   primitive.ObjectID `bson:"upstream_site_id" json:"upstreamSiteId"`
 	ChannelID        int                `bson:"channelId" json:"channelId"`
-	Type           int                `bson:"type" json:"type"`
-	Status         int                `bson:"status" json:"status"`
-	Name           string             `bson:"name" json:"name"`
-	Weight         int                `bson:"weight" json:"weight"`
-	CreatedTime    int64              `bson:"created_time" json:"createdTime"`
-	TestTime       int64              `bson:"test_time" json:"testTime"`
-	ResponseTime   int                `bson:"response_time" json:"responseTime"`
-	BaseURL        string             `bson:"base_url" json:"baseUrl"`
-	Balance        float64            `bson:"balance" json:"balance"`
-	Models         string             `bson:"models" json:"models"`
-	Group          string             `bson:"group" json:"group"`
-	UsedQuota      int64              `bson:"used_quota" json:"usedQuota"`
-	ModelMapping   string             `bson:"model_mapping" json:"modelMapping"`
-	Priority       int                `bson:"priority" json:"priority"`
-	AutoBan        int                `bson:"auto_ban" json:"autoBan"`
-	Tag            string             `bson:"tag" json:"tag"`
+	Type             int                `bson:"type" json:"type"`
+	Status           int                `bson:"status" json:"status"`
+	Name             string             `bson:"name" json:"name"`
+	Weight           int                `bson:"weight" json:"weight"`
+	CreatedTime      int64              `bson:"created_time" json:"createdTime"`
+	TestTime         int64              `bson:"test_time" json:"testTime"`
+	ResponseTime     int                `bson:"response_time" json:"responseTime"`
+	BaseURL          string             `bson:"base_url" json:"baseUrl"`
+	Balance          float64            `bson:"balance" json:"balance"`
+	Models           string             `bson:"models" json:"models"`
+	Group            string             `bson:"group" json:"group"`
+	UsedQuota        int64              `bson:"used_quota" json:"usedQuota"`
+	ModelMapping     string             `bson:"model_mapping" json:"modelMapping"`
+	Priority         int                `bson:"priority" json:"priority"`
+	AutoBan          int                `bson:"auto_ban" json:"autoBan"`
+	Tag              string             `bson:"tag" json:"tag"`
 	TestModel        string             `bson:"test_model" json:"testModel"`
 	CustomTestModels []string           `bson:"custom_test_models,omitempty" json:"customTestModels,omitempty"`
 	TestResult       string             `bson:"test_result" json:"testResult"`
-	TestError      string             `bson:"test_error" json:"testError"`
-	TestedAt       *time.Time         `bson:"tested_at,omitempty" json:"testedAt,omitempty"`
-	FetchedAt      time.Time          `bson:"fetched_at" json:"fetchedAt"`
+	TestError        string             `bson:"test_error" json:"testError"`
+	TestedAt         *time.Time         `bson:"tested_at,omitempty" json:"testedAt,omitempty"`
+	FetchedAt        time.Time          `bson:"fetched_at" json:"fetchedAt"`
 }
 
 type ChannelTestResultDetail struct {
 	Model        string `bson:"model" json:"model"`
 	Success      bool   `bson:"success" json:"success"`
+	Blocked      bool   `bson:"blocked,omitempty" json:"blocked,omitempty"`
 	ResponseTime int    `bson:"response_time" json:"responseTime"`
 	Error        string `bson:"error,omitempty" json:"error,omitempty"`
 }
 
 type ChannelTestResult struct {
-	ID           primitive.ObjectID       `bson:"_id,omitempty" json:"id"`
-	RunID        string                   `bson:"run_id" json:"runId"`
-	ChannelID    int                      `bson:"channel_id" json:"channelId"`
-	Name         string                   `bson:"name" json:"name"`
-	TestModel    string                   `bson:"test_model" json:"testModel"`
-	Success      bool                     `bson:"success" json:"success"`
-	ResponseTime int                      `bson:"response_time" json:"responseTime"`
-	Error        string                   `bson:"error,omitempty" json:"error,omitempty"`
-	ModelResults []ChannelTestResultDetail `bson:"model_results,omitempty" json:"modelResults,omitempty"`
-	Status       int                      `bson:"status" json:"status"`
-	TestedAt     time.Time                `bson:"tested_at" json:"testedAt"`
+	ID               primitive.ObjectID        `bson:"_id,omitempty" json:"id"`
+	RunID            string                    `bson:"run_id" json:"runId"`
+	ChannelID        int                       `bson:"channel_id" json:"channelId"`
+	Name             string                    `bson:"name" json:"name"`
+	TestModel        string                    `bson:"test_model" json:"testModel"`
+	Success          bool                      `bson:"success" json:"success"`
+	AllModelsBlocked bool                      `bson:"all_models_blocked,omitempty" json:"allModelsBlocked,omitempty"`
+	ResponseTime     int                       `bson:"response_time" json:"responseTime"`
+	Error            string                    `bson:"error,omitempty" json:"error,omitempty"`
+	ModelResults     []ChannelTestResultDetail `bson:"model_results,omitempty" json:"modelResults,omitempty"`
+	Status           int                       `bson:"status" json:"status"`
+	TestedAt         time.Time                 `bson:"tested_at" json:"testedAt"`
 }
 
 type CodexConfig struct {
@@ -246,14 +257,14 @@ type DashboardRankItem struct {
 }
 
 type SiteDailyStats struct {
-	ID                primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	UpstreamSiteID    primitive.ObjectID `bson:"upstream_site_id" json:"upstreamSiteId"`
-	SiteName          string             `bson:"site_name" json:"siteName"`
-	Date              string             `bson:"date" json:"date"`
-	TotalQuota        int64              `bson:"total_quota" json:"totalQuota"`
-	SuccessCount      int                `bson:"success_count" json:"successCount"`
-	ErrorCount        int                `bson:"error_count" json:"errorCount"`
-	TotalCount        int                `bson:"total_count" json:"totalCount"`
+	ID                primitive.ObjectID  `bson:"_id,omitempty" json:"id"`
+	UpstreamSiteID    primitive.ObjectID  `bson:"upstream_site_id" json:"upstreamSiteId"`
+	SiteName          string              `bson:"site_name" json:"siteName"`
+	Date              string              `bson:"date" json:"date"`
+	TotalQuota        int64               `bson:"total_quota" json:"totalQuota"`
+	SuccessCount      int                 `bson:"success_count" json:"successCount"`
+	ErrorCount        int                 `bson:"error_count" json:"errorCount"`
+	TotalCount        int                 `bson:"total_count" json:"totalCount"`
 	ModelRanking      []DashboardRankItem `bson:"model_ranking" json:"modelRanking"`
 	ChannelRanking    []DashboardRankItem `bson:"channel_ranking" json:"channelRanking"`
 	UserRanking       []DashboardRankItem `bson:"user_ranking" json:"userRanking"`
@@ -302,13 +313,13 @@ type DashboardComputeTask struct {
 	ErrorModelRankingStatus string `bson:"error_model_ranking_status" json:"errorModelRankingStatus"`
 	ErrorModelRankingError  string `bson:"error_model_ranking_error,omitempty" json:"errorModelRankingError,omitempty"`
 
-	StatQuota             int64            `bson:"stat_quota" json:"statQuota"`
-	PaginatedQuota        int64            `bson:"paginated_quota" json:"paginatedQuota"`
-	SuccessCount          int              `bson:"success_count" json:"successCount"`
-	PaginatedModelQuota   map[string]int64 `bson:"paginated_model_quota,omitempty" json:"-"`
-	PaginatedChannelQuota map[string]int64 `bson:"paginated_channel_quota,omitempty" json:"-"`
+	StatQuota             int64             `bson:"stat_quota" json:"statQuota"`
+	PaginatedQuota        int64             `bson:"paginated_quota" json:"paginatedQuota"`
+	SuccessCount          int               `bson:"success_count" json:"successCount"`
+	PaginatedModelQuota   map[string]int64  `bson:"paginated_model_quota,omitempty" json:"-"`
+	PaginatedChannelQuota map[string]int64  `bson:"paginated_channel_quota,omitempty" json:"-"`
 	ChannelIDToName       map[string]string `bson:"channel_id_to_name,omitempty" json:"-"`
-	PaginatedUserQuota    map[string]int64 `bson:"paginated_user_quota,omitempty" json:"-"`
+	PaginatedUserQuota    map[string]int64  `bson:"paginated_user_quota,omitempty" json:"-"`
 
 	ModelRanking      []DashboardRankItem `bson:"model_ranking,omitempty" json:"modelRanking,omitempty"`
 	ChannelRanking    []DashboardRankItem `bson:"channel_ranking,omitempty" json:"channelRanking,omitempty"`

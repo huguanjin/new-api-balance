@@ -67,6 +67,8 @@ func main() {
 			protected.POST("/channel-availability/test/:channelId", handlers.TestSingleChannelAvailabilityHandler)
 			protected.POST("/channel-availability/test-models/:channelId", handlers.TestChannelModelsHandler)
 			protected.PUT("/channel-availability/channels/:channelId/test-models", handlers.SaveChannelCustomTestModelsHandler)
+			protected.GET("/channel-availability/test-models", handlers.GetChannelAvailabilityTestModelsHandler)
+			protected.PUT("/channel-availability/test-models", handlers.SaveChannelAvailabilityTestModelsHandler)
 			protected.POST("/channel-availability/batch-status", handlers.BatchUpdateChannelStatusHandler)
 			protected.POST("/channel-availability/delete", handlers.DeleteUpstreamChannelsHandler)
 			protected.GET("/channel-availability/notify-config", handlers.GetChannelAvailabilityNotifyConfigHandler)

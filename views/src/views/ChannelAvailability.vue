@@ -170,15 +170,74 @@
             default-first-option
             style="width: 100%"
           >
-            <el-option v-for="m in defaultTestModels" :key="m" :label="m" :value="m" />
+            <el-option v-for="m in batchTestModelOptions" :key="m" :label="m" :value="m" />
           </el-select>
-          <div class="form-tip">可从下拉列表选择，也可直接输入任意模型名称；留空则每个渠道使用各自的默认测试模型</div>
+          <div class="form-tip">
+            可从下拉列表选择，也可直接输入任意模型名称后回车；留空则每个渠道使用各自的默认测试模型
+            <el-button type="primary" link size="small" @click="openTestModelManageDialog">
+              管理下拉模型
+            </el-button>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
           <el-button @click="batchTestDialogVisible = false">取消</el-button>
           <el-button type="primary" @click="confirmBatchTest" :loading="testingSelected">开始测试</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <!-- 下拉测试模型管理弹窗 -->
+    <el-dialog
+      title="管理下拉测试模型"
+      v-model="testModelManageDialogVisible"
+      width="560px"
+      :close-on-click-modal="false"
+    >
+      <el-alert
+        class="model-test-alert"
+        type="info"
+        :closable="false"
+        title="在此添加的模型会出现在批量测试的下拉列表中，方便批量选择使用；内置模型始终保留。"
+      />
+
+      <el-form label-width="90px">
+        <el-form-item label="添加模型">
+          <div class="test-model-add-row">
+            <el-input
+              v-model="newTestModelName"
+              placeholder="输入模型名称，如 gpt-5.5-turbo"
+              clearable
+              @keyup.enter="addCustomTestModel"
+            />
+            <el-button type="primary" @click="addCustomTestModel">添加</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="自定义模型">
+          <div v-if="!customTestModelNames.length" class="test-model-empty">暂无自定义模型</div>
+          <div v-else class="test-model-list">
+            <el-tag
+              v-for="m in customTestModelNames"
+              :key="m"
+              closable
+              type="warning"
+              @close="removeCustomTestModel(m)"
+            >{{ m }}</el-tag>
+          </div>
+          <div class="form-tip">删除仅影响下拉列表，不影响已保存的渠道测试模型配置</div>
+        </el-form-item>
+        <el-form-item label="内置模型">
+          <div class="test-model-list">
+            <el-tag v-for="m in defaultTestModels" :key="m" type="info">{{ m }}</el-tag>
+          </div>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="testModelManageDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="saveCustomTestModelNames" :loading="savingTestModelNames">保存</el-button>
         </span>
       </template>
     </el-dialog>
@@ -340,6 +399,18 @@
               <el-switch v-model="group.anyModelSuccess" />
               <div class="form-tip">开启后：渠道配置了多个测试模型时，只要有一个模型测试成功即视为渠道可用；若渠道原来是禁用状态则自动启用（需同时开启自动启停）</div>
             </el-form-item>
+            <el-form-item label="测试全部模型">
+              <el-switch v-model="group.testAllModels" />
+              <div class="form-tip">开启后：不再只测单个模型，而是测试渠道挂载的所有模型（每渠道最多 50 个）</div>
+            </el-form-item>
+            <el-form-item label="全模型被拦截则停用">
+              <el-switch v-model="group.disableWhenBlocked" />
+              <div class="form-tip">开启后：某渠道所有模型都返回 403 或「Operation is not allow」时，直接停用该渠道（不受自动启停开关影响）</div>
+            </el-form-item>
+            <el-form-item label="始终推送报告">
+              <el-switch v-model="group.alwaysNotify" />
+              <div class="form-tip">开启后：该监测组所有渠道都正常时也会推送测试报告</div>
+            </el-form-item>
             <el-form-item label="响应超时停用">
               <el-input-number v-model="group.slowThresholdMs" :min="0" :step="1000" style="width: 180px" />
               <span style="margin-left: 8px; color: #606266; font-size: 13px">ms</span>
@@ -499,6 +570,17 @@ const defaultTestModels = [
 
 const batchTestModel = ref('')
 const batchTestDialogVisible = ref(false)
+const customTestModelNames = ref([])
+const testModelManageDialogVisible = ref(false)
+const newTestModelName = ref('')
+const savingTestModelNames = ref(false)
+const batchTestModelOptions = computed(() => {
+  const merged = [...defaultTestModels]
+  for (const m of customTestModelNames.value) {
+    if (!merged.includes(m)) merged.push(m)
+  }
+  return merged
+})
 const channels = ref([])
 const loading = ref(false)
 const fetching = ref(false)
@@ -547,6 +629,9 @@ const notifyForm = ref({
       statusFilter: 0,
       autoToggle: false,
       anyModelSuccess: false,
+      testAllModels: false,
+      disableWhenBlocked: false,
+      alwaysNotify: false,
       slowThresholdMs: 0,
       skipStatusCodes: [],
       skipStatusCodesStr: '',
@@ -723,6 +808,58 @@ const openBatchTestDialog = () => {
   }
   batchTestModel.value = ''
   batchTestDialogVisible.value = true
+}
+
+// --- 下拉测试模型管理 ---
+
+const loadCustomTestModelNames = async () => {
+  try {
+    const res = await axios.get('/api/channel-availability/test-models', { headers: authHeaders() })
+    customTestModelNames.value = res.data?.models || []
+  } catch {
+    // 下拉列表加载失败不影响其他功能
+  }
+}
+
+const openTestModelManageDialog = () => {
+  newTestModelName.value = ''
+  testModelManageDialogVisible.value = true
+}
+
+const addCustomTestModel = () => {
+  const name = newTestModelName.value.trim()
+  if (!name) {
+    ElMessage.warning('请输入模型名称')
+    return
+  }
+  if (customTestModelNames.value.includes(name) || defaultTestModels.includes(name)) {
+    ElMessage.warning('该模型已在列表中')
+    return
+  }
+  customTestModelNames.value = [...customTestModelNames.value, name]
+  newTestModelName.value = ''
+}
+
+const removeCustomTestModel = (name) => {
+  customTestModelNames.value = customTestModelNames.value.filter(m => m !== name)
+}
+
+const saveCustomTestModelNames = async () => {
+  savingTestModelNames.value = true
+  try {
+    const res = await axios.put('/api/channel-availability/test-models', {
+      models: customTestModelNames.value
+    }, {
+      headers: authHeaders()
+    })
+    customTestModelNames.value = res.data?.models || customTestModelNames.value
+    ElMessage.success('下拉测试模型已保存')
+    testModelManageDialogVisible.value = false
+  } catch (err) {
+    ElMessage.error(err.response?.data?.error || '保存失败')
+  } finally {
+    savingTestModelNames.value = false
+  }
 }
 
 const confirmBatchTest = async () => {
@@ -994,6 +1131,9 @@ const makeGroupFromApi = (g) => ({
   statusFilter: g.statusFilter ?? 0,
   autoToggle: g.autoToggle || false,
   anyModelSuccess: g.anyModelSuccess || false,
+  testAllModels: g.testAllModels || false,
+  disableWhenBlocked: g.disableWhenBlocked || false,
+  alwaysNotify: g.alwaysNotify || false,
   slowThresholdMs: g.slowThresholdMs ?? 0,
   skipStatusCodes: g.skipStatusCodes || [],
   skipStatusCodesStr: (g.skipStatusCodes || []).join(','),
@@ -1070,6 +1210,9 @@ const addMonitoringGroup = () => {
     statusFilter: 0,
     autoToggle: false,
     anyModelSuccess: false,
+    testAllModels: false,
+    disableWhenBlocked: false,
+    alwaysNotify: false,
     slowThresholdMs: 0,
     skipStatusCodes: [],
     skipStatusCodesStr: '',
@@ -1117,6 +1260,9 @@ const saveNotifyConfig = async () => {
       statusFilter: g.statusFilter,
       autoToggle: g.autoToggle,
       anyModelSuccess: g.anyModelSuccess,
+      testAllModels: g.testAllModels,
+      disableWhenBlocked: g.disableWhenBlocked,
+      alwaysNotify: g.alwaysNotify,
       slowThresholdMs: g.slowThresholdMs,
       skipStatusCodes: (g.skipStatusCodesStr || '').split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n)),
       schedules: (g.schedules || []).map(s => ({
@@ -1362,6 +1508,7 @@ const logout = () => {
 }
 
 onMounted(async () => {
+  loadCustomTestModelNames()
   await loadSites()
   if (selectedSiteId.value) {
     loadChannels()
@@ -1452,6 +1599,24 @@ onMounted(async () => {
   color: #909399;
   font-size: 12px;
   line-height: 1.4;
+}
+
+.test-model-add-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.test-model-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+
+.test-model-empty {
+  color: #909399;
+  font-size: 13px;
 }
 
 .notify-missing-tags {
