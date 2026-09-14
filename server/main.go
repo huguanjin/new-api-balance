@@ -70,6 +70,7 @@ func main() {
 			protected.POST("/channel-availability/global-notify-run", handlers.RunChannelAvailabilityGlobalNotifyHandler)
 			protected.POST("/channel-availability/notify-test", handlers.TestChannelAvailabilityNotifyHandler)
 			protected.POST("/channel-availability/notify-run", handlers.RunChannelAvailabilityNotifyHandler)
+			protected.POST("/settlement/query", handlers.SettlementQueryHandler)
 			protected.POST("/customer-bill-export", handlers.CreateCustomerBillExportJobHandler)
 			protected.GET("/customer-bill-export", handlers.ListCustomerBillExportJobsHandler)
 			protected.GET("/customer-bill-export/:id", handlers.GetCustomerBillExportJobHandler)

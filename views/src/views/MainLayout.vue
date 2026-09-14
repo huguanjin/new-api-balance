@@ -37,6 +37,16 @@
           <el-icon><Search /></el-icon>
           <span>自定义查询导出</span>
         </el-menu-item>
+        <el-sub-menu index="settlement">
+          <template #title>
+            <el-icon><Money /></el-icon>
+            <span>结算</span>
+          </template>
+          <el-menu-item index="/settlement/query">
+            <el-icon><DataLine /></el-icon>
+            <span>查询结算金额</span>
+          </el-menu-item>
+        </el-sub-menu>
       </el-menu>
     </el-aside>
 
@@ -85,6 +95,13 @@
           >
             自定义查询
           </el-button>
+          <el-button
+            :type="route.path === '/settlement/query' ? 'primary' : 'default'"
+            :icon="Money"
+            @click="router.push('/settlement/query')"
+          >
+            结算金额
+          </el-button>
         </div>
         <div class="header-title">
           <h1>{{ pageTitle }}</h1>
@@ -124,7 +141,7 @@
 <script setup>
 import { computed, ref, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Coin, Connection, OfficeBuilding, SwitchButton, Lock, Wallet, Tickets, Search } from '@element-plus/icons-vue'
+import { Coin, Connection, OfficeBuilding, SwitchButton, Lock, Wallet, Tickets, Search, Money, DataLine } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 
@@ -138,6 +155,7 @@ const pageMeta = {
   '/user-balance-stats': { title: '用户余额统计', description: '拉取各上游站点用户信息，统计用户余额分布' },
   '/bill-export': { title: '客户账单导出', description: '直连上游站点 MySQL 数据库，按用户名/用户ID和时间段导出账单' },
   '/custom-sql-export': { title: '自定义查询导出', description: '直连上游站点 MySQL 数据库，执行自定义只读 SQL 查询并导出 CSV' },
+  '/settlement/query': { title: '查询结算金额', description: '直连上游站点 MySQL 数据库，按用户名或用户ID与时间段查询消费额度' },
 }
 
 const pageTitle = computed(() => pageMeta[route.path]?.title || '余额管理')
@@ -268,6 +286,24 @@ const handleChangePassword = async () => {
   background: #1f2937;
 }
 
+.side-menu :deep(.el-sub-menu__title) {
+  color: #cbd5e1;
+}
+
+.side-menu :deep(.el-sub-menu__title:hover) {
+  color: #ffffff;
+  background: #1f2937;
+}
+
+.side-menu :deep(.el-menu--inline) {
+  background: transparent;
+}
+
+.side-menu :deep(.el-menu--inline .el-menu-item) {
+  background: #0b1220;
+  padding-left: 44px !important;
+}
+
 .app-header {
   display: flex;
   align-items: center;
@@ -335,12 +371,15 @@ const handleChangePassword = async () => {
 
   .mobile-nav {
     display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
     order: 2;
     width: 100%;
   }
 
   .mobile-nav .el-button {
-    flex: 1;
+    flex: 1 1 calc(33.333% - 6px);
+    margin-left: 0;
   }
 
   .header-title {

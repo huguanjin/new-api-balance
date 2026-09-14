@@ -7,6 +7,7 @@ import UpstreamSites from '../views/UpstreamSites.vue'
 import UserBalanceStats from '../views/UserBalanceStats.vue'
 import BillExport from '../views/BillExport.vue'
 import CustomSqlExport from '../views/CustomSqlExport.vue'
+import SettlementQuery from '../views/SettlementQuery.vue'
 
 const routes = [
   {
@@ -52,6 +53,11 @@ const routes = [
         path: 'custom-sql-export',
         name: 'CustomSqlExport',
         component: CustomSqlExport
+      },
+      {
+        path: 'settlement/query',
+        name: 'SettlementQuery',
+        component: SettlementQuery
       }
     ]
   }
