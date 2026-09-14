@@ -24,26 +24,7 @@ type Site struct {
 	AdminAccount   string               `bson:"admin_account,omitempty" json:"adminAccount,omitempty"`
 	AdminPassword  string               `bson:"admin_password,omitempty" json:"adminPassword,omitempty"`
 	Remark         string               `bson:"remark,omitempty" json:"remark,omitempty"`
-	IsKey          bool                 `bson:"is_key,omitempty" json:"isKey,omitempty"`
-	ModelDetection ModelDetectionConfig `bson:"model_detection,omitempty" json:"modelDetection,omitempty"`
-}
-
-type ModelDetectionConfig struct {
-	Enabled bool                   `bson:"enabled" json:"enabled"`
-	APIKey  string                 `bson:"api_key" json:"apiKey"`
-	Targets []ModelDetectionTarget `bson:"targets" json:"targets"`
-}
-
-type ModelDetectionTarget struct {
-	ID                        string `bson:"id" json:"id"`
-	Enabled                   bool   `bson:"enabled" json:"enabled"`
-	Protocol                  string `bson:"protocol" json:"protocol"`
-	Model                     string `bson:"model" json:"model"`
-	BaseURL                   string `bson:"base_url" json:"baseUrl"`
-	Mode                      string `bson:"mode" json:"mode"`
-	IncludeLongContext        bool   `bson:"include_long_context" json:"includeLongContext"`
-	IncludeLongContextExtreme bool   `bson:"include_long_context_extreme" json:"includeLongContextExtreme"`
-	Force                     bool   `bson:"force" json:"force"`
+	IsKey          bool   `bson:"is_key,omitempty" json:"isKey,omitempty"`
 }
 
 type NotificationConfig struct {
@@ -117,27 +98,6 @@ type KeyCustomerConfig struct {
 	UserIDs          []int              `bson:"user_ids" json:"userIds"`
 	WarningThreshold float64            `bson:"warning_threshold" json:"warningThreshold"`
 	UpdatedAt        time.Time          `bson:"updated_at" json:"updatedAt"`
-}
-
-type ModelDetectionNotificationConfig struct {
-	ID                string                 `bson:"_id,omitempty" json:"-"`
-	Enabled           bool                   `bson:"enabled" json:"enabled"`
-	AutoDetectEnabled bool                   `bson:"auto_detect_enabled" json:"autoDetectEnabled"`
-	VeridropURL       string                 `bson:"veridrop_url" json:"veridropUrl"`
-	VeridropAPIToken  string                 `bson:"veridrop_api_token" json:"veridropApiToken"`
-	ReportBaseURL     string                 `bson:"report_base_url" json:"reportBaseUrl"`
-	NotificationType  string                 `bson:"notification_type" json:"notification_type"`
-	WebhookURL        string                 `bson:"webhook_url" json:"webhook_url"`
-	SignKey           string                 `bson:"sign_key" json:"sign_key"`
-	WeworkWebhookURL  string                 `bson:"wework_webhook_url" json:"wework_webhook_url"`
-	IntervalMinutes   int                    `bson:"interval_minutes" json:"interval_minutes"`
-	Schedules         []NotificationSchedule `bson:"schedules" json:"schedules"`
-	PushPolicy        string                 `bson:"push_policy" json:"pushPolicy"`
-	LastAutoRunAt     *time.Time             `bson:"last_auto_run_at,omitempty" json:"last_auto_run_at,omitempty"`
-	LastAttemptAt     *time.Time             `bson:"last_attempt_at,omitempty" json:"last_attempt_at,omitempty"`
-	LastSentAt        *time.Time             `bson:"last_sent_at,omitempty" json:"last_sent_at,omitempty"`
-	LastError         string                 `bson:"last_error" json:"last_error"`
-	UpdatedAt         time.Time              `bson:"updated_at" json:"updated_at"`
 }
 
 type MonitoringGroup struct {
@@ -242,14 +202,6 @@ type ChannelTestResult struct {
 	TestedAt         time.Time                 `bson:"tested_at" json:"testedAt"`
 }
 
-type CodexConfig struct {
-	ID         string    `bson:"_id,omitempty" json:"-"`
-	BaseURL    string    `bson:"base_url" json:"baseUrl"`
-	AdminToken string    `bson:"admin_token" json:"adminToken"`
-	Timeout    int       `bson:"timeout" json:"timeout"`
-	UpdatedAt  time.Time `bson:"updated_at" json:"updatedAt"`
-}
-
 type DashboardRankItem struct {
 	Name  string `bson:"name" json:"name"`
 	Quota int64  `bson:"quota" json:"quota"`
@@ -331,34 +283,4 @@ type DashboardComputeTask struct {
 	UpdatedAt time.Time `bson:"updated_at" json:"updatedAt"`
 }
 
-type ModelDetectionJob struct {
-	ID             primitive.ObjectID     `bson:"_id,omitempty" json:"id"`
-	SiteID         primitive.ObjectID     `bson:"site_id" json:"siteId"`
-	SiteName       string                 `bson:"site_name" json:"siteName"`
-	ChannelID      int                    `bson:"channel_id" json:"channelId"`
-	TargetID       string                 `bson:"target_id" json:"targetId"`
-	Protocol       string                 `bson:"protocol" json:"protocol"`
-	Model          string                 `bson:"model" json:"model"`
-	Mode           string                 `bson:"mode" json:"mode"`
-	BaseURL        string                 `bson:"base_url" json:"baseUrl"`
-	VeridropJobID  string                 `bson:"veridrop_job_id" json:"veridropJobId"`
-	Status         string                 `bson:"status" json:"status"`
-	ResultURL      string                 `bson:"result_url" json:"resultUrl"`
-	ImageURL       string                 `bson:"image_url" json:"imageUrl"`
-	JSONURL        string                 `bson:"json_url" json:"jsonUrl"`
-	Verdict        string                 `bson:"verdict" json:"verdict"`
-	Tier           string                 `bson:"tier" json:"tier"`
-	TierTitle      string                 `bson:"tier_title" json:"tierTitle"`
-	TotalScore     float64                `bson:"total_score" json:"totalScore"`
-	Summary        string                 `bson:"summary" json:"summary"`
-	Error          string                 `bson:"error" json:"error"`
-	Report         map[string]interface{} `bson:"report,omitempty" json:"report,omitempty"`
-	CreatedAt      time.Time              `bson:"created_at" json:"createdAt"`
-	SubmittedAt    *time.Time             `bson:"submitted_at,omitempty" json:"submittedAt,omitempty"`
-	StartedAt      *time.Time             `bson:"started_at,omitempty" json:"startedAt,omitempty"`
-	FinishedAt     *time.Time             `bson:"finished_at,omitempty" json:"finishedAt,omitempty"`
-	UpdatedAt      time.Time              `bson:"updated_at" json:"updatedAt"`
-	NotifiedAt     *time.Time             `bson:"notified_at,omitempty" json:"notifiedAt,omitempty"`
-	LastPolledAt   *time.Time             `bson:"last_polled_at,omitempty" json:"lastPolledAt,omitempty"`
-	NotificationAt *time.Time             `bson:"notification_at,omitempty" json:"notificationAt,omitempty"`
-}
+

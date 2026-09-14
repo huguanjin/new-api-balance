@@ -13,17 +13,9 @@
         :default-active="route.path"
         router
       >
-        <el-menu-item index="/dashboard">
-          <el-icon><Odometer /></el-icon>
-          <span>管理面板</span>
-        </el-menu-item>
         <el-menu-item index="/balance">
           <el-icon><Coin /></el-icon>
           <span>余额管理</span>
-        </el-menu-item>
-        <el-menu-item index="/model-detection">
-          <el-icon><Monitor /></el-icon>
-          <span>模型检测</span>
         </el-menu-item>
         <el-menu-item index="/channel-availability">
           <el-icon><Connection /></el-icon>
@@ -32,18 +24,6 @@
         <el-menu-item index="/upstream-sites">
           <el-icon><OfficeBuilding /></el-icon>
           <span>上游站点</span>
-        </el-menu-item>
-        <el-menu-item index="/codex-balance">
-          <el-icon><Cpu /></el-icon>
-          <span>Codex 号池</span>
-        </el-menu-item>
-        <el-menu-item index="/upstream-logs">
-          <el-icon><Document /></el-icon>
-          <span>上游日志</span>
-        </el-menu-item>
-        <el-menu-item index="/upstream-stats">
-          <el-icon><DataAnalysis /></el-icon>
-          <span>分组统计</span>
         </el-menu-item>
         <el-menu-item index="/user-balance-stats">
           <el-icon><Wallet /></el-icon>
@@ -64,25 +44,11 @@
       <el-header class="app-header">
         <div class="mobile-nav">
           <el-button
-            :type="route.path === '/dashboard' ? 'primary' : 'default'"
-            :icon="Odometer"
-            @click="router.push('/dashboard')"
-          >
-            面板
-          </el-button>
-          <el-button
             :type="route.path === '/balance' ? 'primary' : 'default'"
             :icon="Coin"
             @click="router.push('/balance')"
           >
             余额
-          </el-button>
-          <el-button
-            :type="route.path === '/model-detection' ? 'primary' : 'default'"
-            :icon="Monitor"
-            @click="router.push('/model-detection')"
-          >
-            模型检测
           </el-button>
           <el-button
             :type="route.path === '/channel-availability' ? 'primary' : 'default'"
@@ -97,27 +63,6 @@
             @click="router.push('/upstream-sites')"
           >
             站点
-          </el-button>
-          <el-button
-            :type="route.path === '/codex-balance' ? 'primary' : 'default'"
-            :icon="Cpu"
-            @click="router.push('/codex-balance')"
-          >
-            Codex
-          </el-button>
-          <el-button
-            :type="route.path === '/upstream-logs' ? 'primary' : 'default'"
-            :icon="Document"
-            @click="router.push('/upstream-logs')"
-          >
-            日志
-          </el-button>
-          <el-button
-            :type="route.path === '/upstream-stats' ? 'primary' : 'default'"
-            :icon="DataAnalysis"
-            @click="router.push('/upstream-stats')"
-          >
-            统计
           </el-button>
           <el-button
             :type="route.path === '/user-balance-stats' ? 'primary' : 'default'"
@@ -179,7 +124,7 @@
 <script setup>
 import { computed, ref, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Coin, Monitor, Connection, OfficeBuilding, Cpu, SwitchButton, Lock, Document, DataAnalysis, Odometer, Wallet, Tickets, Search } from '@element-plus/icons-vue'
+import { Coin, Connection, OfficeBuilding, SwitchButton, Lock, Wallet, Tickets, Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 
@@ -187,13 +132,9 @@ const route = useRoute()
 const router = useRouter()
 
 const pageMeta = {
-  '/dashboard': { title: '管理面板', description: '各站点今日消费统计与排行看板' },
-  '/model-detection': { title: '模型真实性检测', description: '配置检测模型、提交 Veridrop 任务并跟踪报告' },
+  '/balance': { title: '余额管理', description: '维护渠道、查询余额、导入上游渠道并发送余额通知' },
   '/channel-availability': { title: '上游渠道可用性检测', description: '获取上游渠道列表，批量检测渠道可用性' },
   '/upstream-sites': { title: '上游站点管理', description: '管理上游 API 站点的鉴权配置' },
-  '/codex-balance': { title: 'Codex 号池余额', description: '查询 Codex 号池各账号配额使用情况' },
-  '/upstream-logs': { title: '上游站点日志', description: '查询各上游站点的请求日志' },
-  '/upstream-stats': { title: '分组成功率统计', description: '按分组聚合上游日志，查看各分组和模型的成功率' },
   '/user-balance-stats': { title: '用户余额统计', description: '拉取各上游站点用户信息，统计用户余额分布' },
   '/bill-export': { title: '客户账单导出', description: '直连上游站点 MySQL 数据库，按用户名/用户ID和时间段导出账单' },
   '/custom-sql-export': { title: '自定义查询导出', description: '直连上游站点 MySQL 数据库，执行自定义只读 SQL 查询并导出 CSV' },

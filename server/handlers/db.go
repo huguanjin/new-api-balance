@@ -22,15 +22,12 @@ var (
 	UserCol                 *mongo.Collection
 	SiteCol                 *mongo.Collection
 	NotificationConfigCol   *mongo.Collection
-	UpstreamSiteCol              *mongo.Collection
-	ModelDetectionConfigCol      *mongo.Collection
-	ModelDetectionJobCol         *mongo.Collection
+	UpstreamSiteCol                     *mongo.Collection
 	ChannelAvailabilityNotifyCol       *mongo.Collection
 	ChannelAvailabilityGlobalNotifyCol *mongo.Collection
 	ChannelAvailabilityTestModelCol    *mongo.Collection
 	UpstreamChannelCol                 *mongo.Collection
 	ChannelTestResultCol         *mongo.Collection
-	CodexConfigCol               *mongo.Collection
 	SiteDailyStatsCol                *mongo.Collection
 	DashboardConfigCol               *mongo.Collection
 	DashboardNotificationConfigCol   *mongo.Collection
@@ -74,14 +71,11 @@ func InitDB() error {
 	SiteCol = db.Collection("sites")
 	NotificationConfigCol = db.Collection("notification_configs")
 	UpstreamSiteCol = db.Collection("upstream_sites")
-	ModelDetectionConfigCol = db.Collection("model_detection_configs")
-	ModelDetectionJobCol = db.Collection("model_detection_jobs")
 	ChannelAvailabilityNotifyCol = db.Collection("channel_availability_notify_configs")
 	ChannelAvailabilityGlobalNotifyCol = db.Collection("channel_availability_global_notify_config")
 	ChannelAvailabilityTestModelCol = db.Collection("channel_availability_test_models")
 	UpstreamChannelCol = db.Collection("upstream_channels")
 	ChannelTestResultCol = db.Collection("channel_test_results")
-	CodexConfigCol = db.Collection("codex_configs")
 	SiteDailyStatsCol = db.Collection("site_daily_stats")
 	DashboardConfigCol = db.Collection("dashboard_config")
 	DashboardNotificationConfigCol = db.Collection("dashboard_notification_config")
